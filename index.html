@@ -30,7 +30,6 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
 <script>
 /* ===== PASTE YOUR FIREBASE CONFIG HERE (Firebase console → Project settings → Your apps → Web app) ===== */
 const firebaseConfig={
@@ -42,7 +41,7 @@ const $=s=>document.querySelector(s);
 const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 if(firebaseConfig.apiKey==='YOUR_API_KEY'){$('#app').innerHTML='<div class="card"><h2>Firebase not configured</h2><p>Open index.html and paste your Firebase config at the top of the script.</p></div>';throw 0}
 firebase.initializeApp(firebaseConfig);
-const auth=firebase.auth(),fs=firebase.firestore(),st=firebase.storage(),TS=()=>firebase.firestore.FieldValue.serverTimestamp();
+const auth=firebase.auth(),fs=firebase.firestore(),TS=()=>firebase.firestore.FieldValue.serverTimestamp();
 const secAuth=firebase.initializeApp(firebaseConfig,'sec').auth();
 const S={users:[],batches:[],subjects:[],projects:[],subs:[]};
 let me=null,tab='students',view={},msg='',needSetup=false,booting=true,settingUp=false,fb='',unsubs=[];
@@ -59,7 +58,10 @@ const bname=id=>(byId('batches',id)||{}).name||'—';
 const run=async f=>{try{await f()}catch(e){msg=e.message||String(e);render()}};
 const toKey=t=>lines(t).map(l=>{const [x,...y]=l.split('=');return{label:x.trim(),value:num(y.join('='))}}).filter(k=>k.label&&!isNaN(k.value));
 const keyTxt=k=>(k||[]).map(x=>x.label+' = '+x.value).join('\n');
-async function upload(path,file){const r=st.ref(path+'/'+Date.now()+'_'+file.name.replace(/[^\w.-]/g,'_'));await r.put(file,{contentType:'application/pdf'});return r.getDownloadURL()}
+const gid=u=>{const m=String(u).match(/\/d\/([\w-]+)|[?&]id=([\w-]+)/);return m&&(m[1]||m[2])};
+const dview=u=>{if(!gid(u))throw new Error('Not a Google Drive file link: '+u);return 'https://drive.google.com/file/d/'+gid(u)+'/view'};
+const dprev=u=>'https://drive.google.com/file/d/'+gid(u)+'/preview';
+const dlinks=t=>t.split(/[\s,]+/).filter(Boolean).map(dview);
 async function mkUser(username,pw){
   if(!/^[a-z0-9._-]+$/i.test(username))throw new Error('Username: letters, numbers . _ - only.');
   if(pw.length<6)throw new Error('Password must be at least 6 characters.');
@@ -136,10 +138,10 @@ function subjectView(){const s=byId('subjects',view.s),l=projs(s.id);
    return `<div class="pr ${op?'':'lock'}"><div><b>${p.order}. ${esc(p.title)}</b><div class="mu ${ok?'ok':''}">${ok?'Completed ✓':op?'Active':'Locked — complete the previous project'}</div></div><button ${op?'':'disabled'} data-a="openProj" data-id="${p.id}">${ok?'Review':'Open'}</button></div>`}).join('')||'<p class="mu">No projects yet.</p>')}
 function projectView(){const p=byId('projects',view.p),mine=S.subs.filter(s=>s.projectId===p.id).sort((a,b)=>(b.at?.seconds||9e9)-(a.at?.seconds||9e9)),done=passed(me.id,p.id);
   return `<p><button data-a="openSub" data-id="${p.subjectId}">← Projects</button></p><h2>${esc(p.title)}</h2>
-  <div class="card"><iframe src="${esc(p.pdfUrl)}" title="Project PDF"></iframe><p><a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">Open PDF in a new tab</a></p></div>
+  <div class="card"><iframe src="${esc(dprev(p.pdfUrl))}" title="Project PDF"></iframe><p><a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">Open in Google Drive</a></p></div>
   <div class="card"><h2>Submit your results</h2>${done?'<p class="ok"><b>Project completed ✓</b> The next project is now active.</p>':mine.length?`<p class="bad">${mine[0].correct} of ${mine[0].total} values matched. Check your work and try again.</p>`:''}
   ${(p.key||[]).map((k,i)=>`<label>${esc(k.label)}</label><input class="ans" inputmode="decimal">`).join('')}
-  <label>Upload report PDFs (Day Book, Profit &amp; Loss, Balance Sheet…)</label><input id="rep" type="file" accept="application/pdf" multiple>
+  <label>Google Drive links of your report PDFs — Day Book, Profit &amp; Loss, Balance Sheet… (one per line)</label><textarea id="rep" placeholder="https://drive.google.com/file/d/..."></textarea><p class="mu">Upload each PDF to your Google Drive, set sharing to “Anyone with the link → Viewer”, then paste the link here.</p>
   <p><button class="p" data-a="submit" data-id="${p.id}">Submit &amp; check</button> <span id="sst" class="mu"></span></p></div>
   <div class="card"><h2>My submissions</h2>${mine.length?tbl(['Date &amp; time','Result','Reports'],mine.map(s=>`<tr><td>${dt(s.at)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Passed':'Not matched'} (${s.correct}/${s.total})</td><td>${(s.files||[]).map((f,i)=>`<a href="${esc(f)}" target="_blank" rel="noopener">PDF ${i+1}</a>`).join(' ')}</td></tr>`)):'<p class="mu">None yet.</p>'}</div>`}
 /* ---------- actions ---------- */
@@ -169,15 +171,15 @@ const ACT={
   addSubj(){dlg('Add subject',[F('name','Subject (e.g. Tally)'),F('category','For category (blank = all)'),F('topics','Syllabus — one per line; start sub-topics with "-"','textarea')],o=>fs.collection('subjects').add({name:o.name,category:o.category,topics:lines(o.topics),createdAt:TS(),updatedAt:TS()}))},
   editSubj(b){const s=byId('subjects',b.dataset.id);dlg('Edit subject',[F('name','Subject','text',s.name),F('category','For category','text',s.category),F('topics','Syllabus (one per line; "-" for sub-topics)','textarea',(s.topics||[]).join('\n'))],o=>fs.doc('subjects/'+s.id).update({name:o.name,category:o.category,topics:lines(o.topics),updatedAt:TS()}))},
   delSubj(b){if(confirm('Delete subject?'))run(()=>fs.doc('subjects/'+b.dataset.id).delete())},
-  addProj(){dlg('Upload project',[F('subjectId','Subject','select','',S.subjects.map(s=>[s.id,s.name])),F('title','Project title'),F('file','Project PDF','file'),F('key','Answer key — one per line: Label = value','textarea')],async o=>{
-    if(!o.file)throw new Error('Choose a PDF.');const url=await upload('projects',o.file);
+  addProj(){dlg('Upload project',[F('subjectId','Subject','select','',S.subjects.map(s=>[s.id,s.name])),F('title','Project title'),F('link','Google Drive link of the project PDF (share: Anyone with the link → Viewer)'),F('key','Answer key — one per line: Label = value','textarea')],async o=>{
+    const url=dview(o.link);
     await fs.collection('projects').add({subjectId:o.subjectId,title:o.title,pdfUrl:url,key:toKey(o.key),order:projs(o.subjectId).length+1,createdAt:TS(),updatedAt:TS()})})},
-  editProj(b){const p=byId('projects',b.dataset.id);dlg('Edit project',[F('title','Title','text',p.title),F('order','Order (1 = first)','number',p.order),F('key','Answer key — Label = value','textarea',keyTxt(p.key)),F('file','Replace PDF (optional)','file')],async o=>{
-    const d={title:o.title,order:+o.order||p.order,key:toKey(o.key),updatedAt:TS()};if(o.file)d.pdfUrl=await upload('projects',o.file);await fs.doc('projects/'+p.id).update(d)})},
+  editProj(b){const p=byId('projects',b.dataset.id);dlg('Edit project',[F('title','Title','text',p.title),F('order','Order (1 = first)','number',p.order),F('key','Answer key — Label = value','textarea',keyTxt(p.key)),F('link','New Google Drive link (leave blank to keep current PDF)')],async o=>{
+    const d={title:o.title,order:+o.order||p.order,key:toKey(o.key),updatedAt:TS()};if(o.link)d.pdfUrl=dview(o.link);await fs.doc('projects/'+p.id).update(d)})},
   delProj(b){if(confirm('Delete project?'))run(()=>fs.doc('projects/'+b.dataset.id).delete())},
   submit(b){run(async()=>{const p=byId('projects',b.dataset.id),sst=$('#sst'),vals=[...document.querySelectorAll('.ans')].map(i=>i.value.trim());
     if(vals.some(x=>x===''||isNaN(num(x))))return sst.textContent='Fill every value with a number.';
-    sst.textContent='Uploading & checking…';b.disabled=true;const files=[];for(const f of $('#rep').files)files.push(await upload('reports/'+me.id,f));
+    let files;try{files=dlinks($('#rep').value)}catch(x){return sst.textContent=x.message}if(!files.length)return sst.textContent='Paste at least one Google Drive link.';sst.textContent='Checking…';b.disabled=true;
     const hits=p.key.map((k,i)=>Math.abs(num(vals[i])-k.value)<=1),correct=hits.filter(Boolean).length,s=byId('subjects',p.subjectId);
     await fs.collection('submissions').add({userId:me.id,studentName:me.name,regno:me.regno,batchId:me.batchId||'',subjectId:p.subjectId,subjectName:s.name,projectId:p.id,projectTitle:p.title,
       values:vals,files,correct,total:p.key.length,passed:p.key.length>0&&correct===p.key.length,at:TS()})})}
