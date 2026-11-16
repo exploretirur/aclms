@@ -126,19 +126,22 @@ const F=(k,l,t='text',v='',o=[])=>({k,l,t,v,o});
 const catSel=(opts,c='')=>`<select class="pc">${opts.map(x=>`<option ${x===c?'selected':''}>${esc(x)}</option>`).join('')}</select>`;
 const rowHTML=(f,a)=>f.t==='list'?`<div class="pr2" style="grid-template-columns:1fr"><input class="li" value="${esc(a||'')}" placeholder="${esc(f.ph||'')}"></div>`:`<div class="pr2">${catSel(f.opts,(a||{}).cat)}<input class="pu" placeholder="Google Drive link of answer PDF" value="${esc((a||{}).url||'')}"></div>`;
 function dlg(title,fields,save){
-  const dv=k=>{const f=fields.find(x=>x.k===k);return f?(f.v||(f.o[0]||[])[0]):''};
-  fields.forEach(f=>{if(f.t==='pairs')f.opts=f.o(dv(f.dep))});
+  const get=k=>fields.find(x=>x.k===k)||{v:''};
+  const optsOf=(f,dv)=>f.dep?f.o(dv):f.o;
+  const init=f=>f.v||(f.t==='select'?((optsOf(f,f.dep?init(get(f.dep)):'')[0])||[])[0]:'')||'';
+  fields.forEach(f=>{if(f.t==='pairs')f.opts=f.o(init(get(f.dep)))});
   const d=document.createElement('dialog');
   d.innerHTML=`<form method="dialog"><h2>${esc(title)}</h2>`+fields.map(f=>`<label>${esc(f.l)}</label>`+
-    (f.t==='select'?`<select name="${f.k}">${f.o.map(([v,l])=>`<option value="${esc(v)}" ${v===f.v?'selected':''}>${esc(l)}</option>`).join('')}</select>`:
+    (f.t==='select'?`<select name="${f.k}">${optsOf(f,f.dep?init(get(f.dep)):'').map(([v,l])=>`<option value="${esc(v)}" ${v===f.v?'selected':''}>${esc(l)}</option>`).join('')}</select>`:
      f.t==='textarea'?`<textarea name="${f.k}">${esc(f.v)}</textarea>`:
      (f.t==='list'||f.t==='pairs')?`<div data-k="${f.k}">${(f.v&&f.v.length?f.v:[f.t==='list'?'':{}]).map(x=>rowHTML(f,x)).join('')}</div><button type="button" class="addrow" data-k="${f.k}">+ Add</button>`:
      `<input name="${f.k}" type="${f.t}" value="${esc(f.v)}">`)).join('')+
     '<p class="row" style="justify-content:flex-start;flex-direction:row-reverse"><button class="p" value="ok">Save</button><button value="x">Cancel</button></p></form>';
   document.body.appendChild(d);d.showModal();
-  d.addEventListener('click',e=>{const b=e.target.closest('.addrow');if(!b)return;const f=fields.find(x=>x.k===b.dataset.k);d.querySelector(`div[data-k="${f.k}"]`).insertAdjacentHTML('beforeend',rowHTML(f))});
-  fields.filter(f=>f.t==='pairs').forEach(f=>{const sel=d.querySelector(`[name="${f.dep}"]`);if(sel)sel.onchange=()=>{f.opts=f.o(sel.value);
-    d.querySelectorAll(`div[data-k="${f.k}"] .pc`).forEach(x=>{const cur=x.value;x.innerHTML=f.opts.map(o=>`<option ${o===cur?'selected':''}>${esc(o)}</option>`).join('')})}});
+  d.addEventListener('click',e=>{const b=e.target.closest('.addrow');if(!b)return;const f=get(b.dataset.k);d.querySelector(`div[data-k="${f.k}"]`).insertAdjacentHTML('beforeend',rowHTML(f))});
+  fields.forEach(df=>{const sel=d.querySelector(`select[name="${df.k}"]`),kids=fields.filter(f=>f.dep===df.k);if(!sel||!kids.length)return;
+    sel.onchange=()=>kids.forEach(f=>{if(f.t==='pairs'){f.opts=f.o(sel.value);d.querySelectorAll(`div[data-k="${f.k}"] .pc`).forEach(x=>{const cur=x.value;x.innerHTML=f.opts.map(o=>`<option ${o===cur?'selected':''}>${esc(o)}</option>`).join('')})}
+      else d.querySelector(`select[name="${f.k}"]`).innerHTML=f.o(sel.value).map(([v,l])=>`<option value="${esc(v)}">${esc(l)}</option>`).join('')})});
   d.onclose=()=>{if(d.returnValue==='ok'){const o={};fields.forEach(f=>{
     if(f.t==='list')o[f.k]=[...d.querySelectorAll(`div[data-k="${f.k}"] .li`)].map(i=>i.value.trim()).filter(Boolean);
     else if(f.t==='pairs')o[f.k]=[...d.querySelectorAll(`div[data-k="${f.k}"] .pr2`)].map(x=>({cat:x.querySelector('.pc').value,url:x.querySelector('.pu').value.trim()})).filter(x=>x.url);
@@ -152,7 +155,7 @@ function render(){
     <p><button class="p" data-a="${setup?'setup':'login'}">${setup?'Create admin':'Log in'}</button></p></div>`}
   let h=`<header><h1>Learning Portal</h1><div class="row"><span class="mu">${esc(me.name)} · ${me.role}</span><button data-a="logout">Log out</button></div></header>`;
   if(msg)h+=`<div class="card bad">${esc(msg)} <button data-a="clr">OK</button></div>`;
-  a.innerHTML=h+(isStaff()?staffView():studentView())}
+  try{a.innerHTML=h+(isStaff()?staffView():studentView())}catch(e){a.innerHTML=h+'<div class="card bad">Display error: '+esc(e.message)+'</div>'}}
 const tbl=(heads,rows)=>`<div class="sc"><table><tr>${heads.map(x=>`<th>${x}</th>`).join('')}</tr>${rows.join('')}</table></div>`;
 const btn=(a,id,l,c='')=>`<button class="${c}" data-a="${a}" data-id="${id}">${l}</button>`;
 function staffView(){
@@ -172,7 +175,7 @@ const topics=s=>'<ul>'+(s.topics||[]).map(t=>t.startsWith('-')?`<li style="margi
 function tSubjects(){return `<div class="card row"><h2>Subjects &amp; syllabus</h2><button class="p" data-a="addSubj">+ Add subject</button></div>`+
   S.subjects.map(s=>`<div class="card"><div class="row"><h2>${esc(s.name)} <span class="mu">${esc(s.category||'All students')} · updated ${dt(s.updatedAt)}</span></h2><div>${btn('editSubj',s.id,'Edit')} ${isAdmin()?btn('delSubj',s.id,'Delete','d'):''}</div></div><p class="mu">Assignment categories: ${(s.cats||[]).map(c=>esc(c)).join(' · ')||'—'}</p>${topics(s)}</div>`).join('')}
 function tProjects(){return `<div class="card row"><h2>Projects</h2><button class="p" data-a="addProj" ${S.subjects.length?'':'disabled'}>+ Add assignment</button></div>`+
-  S.subjects.map(s=>{const l=projs(s.id);return l.length?`<div class="card"><h2>${esc(s.name)}</h2>`+l.map(p=>`<div class="pr"><div><b>${p.order}. ${esc(p.title)}</b><div class="mu">${esc(reqCats(p).join(', '))} · <a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">PDF</a> · updated ${dt(p.updatedAt)}</div></div><div>${btn('editProj',p.id,'Edit')} ${isAdmin()?btn('delProj',p.id,'Delete','d'):''}</div></div>`).join('')+'</div>':''}).join('')}
+  S.subjects.map(s=>{const l=projs(s.id);return l.length?`<div class="card"><h2>${esc(s.name)}</h2>`+l.map(p=>`<div class="pr"><div><b>${p.order}. ${esc(p.title)}</b><div class="mu">${esc((p.topic||'General').replace(/^-\s*/,''))} · ${esc(reqCats(p).join(', '))} · <a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">PDF</a> · updated ${dt(p.updatedAt)}</div></div><div>${btn('editProj',p.id,'Edit')} ${isAdmin()?btn('delProj',p.id,'Delete','d'):''}</div></div>`).join('')+'</div>':''}).join('')}
 function tSubs(){let l=S.subs.filter(s=>!fb||s.batchId===fb);if(fe==='err')l=l.filter(s=>!s.passed);
   const lk=s=>(s.files||[]).map((f,i)=>`<a href="${esc(f)}" target="_blank" rel="noopener">PDF ${i+1}</a>`).join(' ');
   return `<div class="card row"><h2>Student submissions (${l.length})</h2><div class="row"><select id="fb" style="width:auto"><option value="">All batches</option>${S.batches.map(b=>`<option value="${b.id}" ${fb===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select><select id="fe" style="width:auto"><option value="">All results</option><option value="err" ${fe==='err'?'selected':''}>Errors only</option></select></div></div><div class="card">`+
@@ -181,18 +184,26 @@ function tProgress(){const st=S.users.filter(u=>u.role==='student');
   return `<div class="card">`+tbl(['Reg. no','Name','Batch',...S.subjects.map(s=>esc(s.name)),'Last submission'],st.map(u=>{
     const last=S.subs.find(s=>s.userId===u.id);
     return `<tr><td>${esc(u.regno)}</td><td>${esc(u.name)}</td><td>${esc(bname(u.batchId))}</td>`+S.subjects.map(s=>{const l=projs(s.id);if(s.category&&s.category!==u.category)return'<td class="mu">–</td>';return`<td>${l.filter(p=>passed(u.id,p.id)).length}/${l.length}</td>`}).join('')+`<td>${last?dt(last.at):'—'}</td></tr>`}))+'</div>'}
+const norm=t=>String(t||'').trim().toLowerCase();
+const mySubjects=()=>S.subjects.filter(s=>!s.category||norm(s.category)===norm(me.category));
+function aRow(p,ps){const i=ps.indexOf(p),ok=passed(me.id,p.id),op=unlocked(me.id,p.subjectId,i),cs=reqCats(p),good=cs.filter(c=>catPassed(me.id,p.id,c)).length,bad=cs.filter(c=>!catPassed(me.id,p.id,c)&&latest(me.id,p.id,c)).length;
+  return `<div class="pr ${op?'':'lock'} ${bad?'errp':''}" style="margin:6px 0 6px 14px"><div><b>${p.order}. ${esc(p.title)}</b><div class="mu ${ok?'ok':bad?'bad':''}">${ok?'Completed ✓':!op?'Inactive — complete the previous assignment first':bad?`⚠ ${bad} submission(s) have errors — resubmit`:`Active · ${good} of ${cs.length} submitted correctly`}</div></div><button ${op?'':'disabled'} data-a="goProj" data-sid="${p.subjectId}" data-id="${p.id}">${ok?'Review':'Open'}</button></div>`}
+function tree(s){const ps=projs(s.id),used=new Set();let h='';
+  (s.topics||[]).forEach(t=>{const sub=t.startsWith('-'),mine=ps.filter(p=>p.topic===t);mine.forEach(p=>used.add(p.id));
+    h+=`<div style="margin:10px 0 0 ${sub?24:0}px"><b>${sub?'↳ ':'▸ '}${esc(t.replace(/^-\s*/,''))}</b>${mine.length?mine.map(p=>aRow(p,ps)).join(''):'<div class="mu" style="margin-left:14px">No assignments yet</div>'}</div>`});
+  const rest=ps.filter(p=>!used.has(p.id));if(rest.length)h+=`<div style="margin-top:10px"><b>▸ Other assignments</b>${rest.map(p=>aRow(p,ps)).join('')}</div>`;
+  return h||'<p class="mu">No assignments yet.</p>'}
 function studentView(){
   if(view.p)return projectView();
-  const subs=S.subjects.filter(s=>!s.category||s.category===me.category);
+  const subs=mySubjects();
   const banner=openErrors().map(x=>`<div class="card err bad">⚠ <b>${esc(x.subjectName)} – ${esc(x.projectTitle)} – ${esc(x.cat)}</b>: ${x.mism.length} error(s) in your latest submission. Fix and resubmit. <button data-a="goProj" data-sid="${x.subjectId}" data-id="${x.projectId}">Open</button></div>`).join('');
-  return banner+`<h2>My dashboard</h2><p class="mu">Reg. no ${esc(me.regno)} · ${esc(bname(me.batchId))} · ${esc(me.category)}</p>`+
-  (subs.map(s=>{const l=projs(s.id),n=l.filter(p=>passed(me.id,p.id)).length,pc=l.length?Math.round(n/l.length*100):0;
-    return `<div class="card"><div class="row"><h2>${esc(s.name)}</h2><span class="mu">${n} of ${l.length} assignments complete (${pc}%)</span></div><div class="bar"><i style="width:${pc}%"></i></div>
-    <details><summary class="mu">Syllabus</summary>${topics(s)}</details><div class="mu" style="margin:10px 0 6px">Assignments</div>`+
-    (l.map((p,i)=>{const ok=passed(me.id,p.id),op=unlocked(me.id,s.id,i),cs=reqCats(p),good=cs.filter(c=>catPassed(me.id,p.id,c)).length,bad=cs.filter(c=>!catPassed(me.id,p.id,c)&&latest(me.id,p.id,c)).length;
-      return `<div class="pr ${op?'':'lock'} ${bad?'errp':''}"><div><b>${p.order}. ${esc(p.title)}</b><div class="mu ${ok?'ok':bad?'bad':''}">${ok?'Completed ✓':!op?'Inactive — complete the previous assignment first':bad?`⚠ ${bad} submission(s) have errors — resubmit`:`Active · ${good} of ${cs.length} submitted correctly`}</div></div><button ${op?'':'disabled'} data-a="goProj" data-sid="${s.id}" data-id="${p.id}">${ok?'Review':'Open'}</button></div>`}).join('')||'<p class="mu">No assignments yet.</p>')+'</div>'}).join('')||'<p class="mu">No subjects assigned yet.</p>')}
+  const prog=subs.map(s=>{const l=projs(s.id),n=l.filter(p=>passed(me.id,p.id)).length,pc=l.length?Math.round(n/l.length*100):0;
+    return `<div class="card"><b>${esc(s.name)}</b><div class="bar"><i style="width:${pc}%"></i></div><span class="mu">${n} of ${l.length} assignments complete (${pc}%)</span></div>`}).join('');
+  return banner+`<h2>My dashboard</h2><p class="mu">Reg. no ${esc(me.regno)} · Batch ${esc(bname(me.batchId))} · Category ${esc(me.category||'—')}</p>`+
+   (subs.length?`<h2>Subject progress</h2><div class="g">${prog}</div><h2>Assignments</h2>`+subs.map(s=>`<details class="card" open><summary><b>${esc(s.name)}</b></summary>${tree(s)}</details>`).join('')
+   :`<div class="card"><p>No subjects are available for your account yet.</p><p class="mu">Your category is “${esc(me.category||'none')}”. Ask your teacher to check that your category matches the subject’s student category.</p></div>`)}
 function projectView(){const p=byId('projects',view.p),cats=reqCats(p),done=passed(me.id,p.id),mine=S.subs.filter(s=>s.projectId===p.id).sort(srt);
-  return `<p><button data-a="back">← Dashboard</button></p><h2>${esc(p.title)}</h2>
+  return `<p><button data-a="back">← Dashboard</button></p><p class="mu">${esc((byId('subjects',p.subjectId)||{}).name)} › ${esc((p.topic||'General').replace(/^-\s*/,''))}</p><h2>${esc(p.title)}</h2>
   <div class="card"><iframe src="${esc(dprev(p.pdfUrl))}" title="Assignment PDF"></iframe><p><a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">Open in Google Drive</a></p></div>
   ${done?'<div class="card"><p class="ok"><b>Assignment completed ✓</b> The next assignment is now active.</p></div>':''}
   <h2>Submit your reports</h2><p class="mu">Export each report from Tally as PDF, upload it to your Google Drive, set sharing to “Anyone with the link → Viewer”, and paste the link. You can resubmit as many times as needed.</p>`+
@@ -205,7 +216,9 @@ function projectView(){const p=byId('projects',view.p),cats=reqCats(p),done=pass
 /* ---------- actions ---------- */
 const catOpts=()=>[['','—']].concat([...new Set(S.batches.map(b=>b.category).filter(Boolean))].map(c=>[c,c]));
 const batchOpts=()=>[['','— none —']].concat(S.batches.map(b=>[b.id,b.name]));
-const stuFields=(u={})=>[F('name','Name','text',u.name),F('regno','Reg. no','text',u.regno),F('batchId','Batch','select',u.batchId||'',batchOpts()),F('category','Category (e.g. Accounting)','text',u.category)];
+const catList=cur=>[['','— none —']].concat([...new Set([...S.batches.map(b=>b.category),cur].filter(Boolean))].map(c=>[c,c]));
+const topicOpts=sid=>[['','General (no topic)']].concat(((byId('subjects',sid)||{}).topics||[]).map(t=>[t,(t.startsWith('-')?'\u00A0\u00A0\u00A0– ':'')+t.replace(/^-\s*/,'')]));
+const stuFields=(u={})=>[F('name','Name','text',u.name),F('regno','Reg. no','text',u.regno),F('batchId','Batch','select',u.batchId||'',batchOpts()),F('category','Category (from batches)','select',u.category||'',catList(u.category))];
 const batFields=(b={})=>[F('name','Batch name','text',b.name),F('category','Category','text',b.category),F('startDate','Start date','date',b.startDate),F('timing','Timing','text',b.timing),F('trainer','Trainer','text',b.trainer),F('notes','Notes','textarea',b.notes)];
 const ACT={
   showErr(){tab='submissions';fe='err';render()},goProj(b){view={s:b.dataset.sid,p:b.dataset.id};render()},
@@ -227,23 +240,25 @@ const ACT={
   addBat(){dlg('Add batch',batFields(),o=>fs.collection('batches').add({...o,createdAt:TS(),updatedAt:TS()}))},
   editBat(b){const x=byId('batches',b.dataset.id);dlg('Edit batch',batFields(x),o=>fs.doc('batches/'+x.id).update({...o,updatedAt:TS()}))},
   delBat(b){if(confirm('Delete batch?'))run(()=>fs.doc('batches/'+b.dataset.id).delete())},
-  addSubj(){dlg('Add subject',[F('name','Subject name (e.g. Tally)'),F('category','Student category (blank = all students)'),F('topics','Syllabus — one per line; start sub-topics with "-"','textarea'),{...F('cats','Assignment submit categories (e.g. Day Book, Profit & Loss, Balance Sheet) — use + for more','list',['','','']),ph:'Category name'}],o=>{
+  addSubj(){dlg('Add subject',[F('name','Subject name (e.g. Tally)'),F('category','Student category (from batches; none = all students)','select','',catList('')),F('topics','Syllabus — one per line; start sub-topics with "-"','textarea'),{...F('cats','Assignment submit categories (e.g. Day Book, Profit & Loss, Balance Sheet) — use + for more','list',['','','']),ph:'Category name'}],o=>{
     if(!o.name)throw new Error('Enter a subject name.');if(!o.cats.length)throw new Error('Add at least one assignment category.');
     return fs.collection('subjects').add({name:o.name,category:o.category,topics:lines(o.topics),cats:o.cats,createdAt:TS(),updatedAt:TS()})})},
-  editSubj(b){const s=byId('subjects',b.dataset.id);dlg('Edit subject',[F('name','Subject','text',s.name),F('category','Student category','text',s.category),F('topics','Syllabus (one per line; "-" for sub-topics)','textarea',(s.topics||[]).join('\n')),{...F('cats','Assignment submit categories — use + for more','list',[...(s.cats||[]),'']),ph:'Category name'}],o=>{
+  editSubj(b){const s=byId('subjects',b.dataset.id);dlg('Edit subject',[F('name','Subject','text',s.name),F('category','Student category (none = all students)','select',s.category||'',catList(s.category)),F('topics','Syllabus (one per line; "-" for sub-topics)','textarea',(s.topics||[]).join('\n')),{...F('cats','Assignment submit categories — use + for more','list',[...(s.cats||[]),'']),ph:'Category name'}],o=>{
     if(!o.cats.length)throw new Error('Add at least one assignment category.');return fs.doc('subjects/'+s.id).update({name:o.name,category:o.category,topics:lines(o.topics),cats:o.cats,updatedAt:TS()})})},
   delSubj(b){if(confirm('Delete subject?'))run(()=>fs.doc('subjects/'+b.dataset.id).delete())},
   addProj(){const cats=id=>(byId('subjects',id)||{}).cats||[];
-    dlg('Add assignment',[F('subjectId','Subject','select',S.subjects[0].id,S.subjects.map(s=>[s.id,s.name])),F('title','Assignment title'),F('link','Assignment question PDF — Google Drive link (Anyone with the link → Viewer)'),
-      {...F('answers','Answer PDFs — choose the category, paste its Drive link, and use + to add more','pairs',[],cats),dep:'subjectId'}],async o=>{
-      const url=dview(o.link);if(!o.answers.length)throw new Error('Add at least one answer PDF.');if(o.answers.some(a=>!a.cat))throw new Error('This subject has no categories. Add them in Subjects first.');
+    dlg('Add assignment',[F('subjectId','Subject','select',S.subjects[0].id,S.subjects.map(s=>[s.id,s.name])),
+      {...F('topic','Topic / sub-topic (from the subject syllabus)','select','',topicOpts),dep:'subjectId'},
+      F('title','Assignment title'),F('link','Assignment question PDF — Google Drive link (Anyone with the link → Viewer)'),
+      {...F('answers','Answer PDFs — choose the submit category, paste its Drive link, and use + to add more','pairs',[],cats),dep:'subjectId'}],async o=>{
+      const url=dview(o.link);if(!o.answers.length)throw new Error('Add at least one answer PDF.');if(o.answers.some(a=>!a.cat))throw new Error('This subject has no submit categories. Add them in Subjects first.');
       o.answers.forEach(a=>a.url=dview(a.url));
-      await fs.collection('projects').add({subjectId:o.subjectId,title:o.title,pdfUrl:url,answers:o.answers,order:projs(o.subjectId).length+1,createdAt:TS(),updatedAt:TS()})})},
+      await fs.collection('projects').add({subjectId:o.subjectId,topic:o.topic,title:o.title,pdfUrl:url,answers:o.answers,order:projs(o.subjectId).length+1,createdAt:TS(),updatedAt:TS()})})},
   editProj(b){const p=byId('projects',b.dataset.id),sj=byId('subjects',p.subjectId)||{},cats=()=>[...new Set([...(sj.cats||[]),...(p.answers||[]).map(a=>a.cat)])];
-    dlg('Edit assignment',[F('title','Title','text',p.title),F('order','Order (1 = first)','number',p.order),F('link','New question PDF link (blank = keep current)'),
-      {...F('answers','Answer PDFs by category (use + to add more)','pairs',p.answers||[],cats),dep:'_'}],async o=>{
+    dlg('Edit assignment',[{...F('topic','Topic / sub-topic','select',p.topic||'',()=>topicOpts(p.subjectId)),dep:'_'},F('title','Title','text',p.title),F('order','Order (1 = first, unlocks in this order)','number',p.order),F('link','New question PDF link (blank = keep current)'),
+      {...F('answers','Answer PDFs by submit category (use + to add more)','pairs',p.answers||[],cats),dep:'_'}],async o=>{
       if(!o.answers.length)throw new Error('Add at least one answer PDF.');o.answers.forEach(a=>a.url=dview(a.url));
-      const d={title:o.title,order:+o.order||p.order,answers:o.answers,updatedAt:TS()};if(o.link)d.pdfUrl=dview(o.link);await fs.doc('projects/'+p.id).update(d)})},
+      const d={topic:o.topic,title:o.title,order:+o.order||p.order,answers:o.answers,updatedAt:TS()};if(o.link)d.pdfUrl=dview(o.link);await fs.doc('projects/'+p.id).update(d)})},
   delProj(b){if(confirm('Delete project?'))run(()=>fs.doc('projects/'+b.dataset.id).delete())},
   submitCat(b){run(async()=>{const p=byId('projects',b.dataset.id),ci=+b.dataset.ci,c=reqCats(p)[ci],sst=$('#sst'+ci),inp=document.querySelector('.rep[data-ci="'+ci+'"]');let f;
     try{f=dview(inp.value.trim())}catch(x){return sst.textContent=x.message}
