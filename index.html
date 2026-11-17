@@ -216,15 +216,16 @@ const isOpen=k=>openSet.has(k);
 const nh=(k,label,extra='')=>`<div class="nh" data-a="tg" data-n="${k}">${isOpen(k)?'▾':'▸'} ${label}${extra}</div>`;
 function aBtn(p,ps){const i=ps.indexOf(p),ok=passed(me.id,p.id),op=unlocked(me.id,p.subjectId,i),bad=reqCats(p).some(c=>!catPassed(me.id,p.id,c)&&latest(me.id,p.id,c));
   return `<button class="ar ${op?'':'lock'} ${bad?'bad':ok?'ok':''} ${view.p===p.id?'on':''}" ${op?'':'disabled'} data-a="goProj" data-sid="${p.subjectId}" data-id="${p.id}">${ok?'✓':!op?'🔒':bad?'⚠':'▶'} ${p.order}. ${esc(p.title)}</button>`}
+const subjActive=s=>{const q=seq(s.id);return !q.length||unlocked(me.id,s.id,projs(s.id).findIndex(x=>x.id===q[0].id))};
 function sideTree(subs){
   let h=nh('topics','<b>Topics</b>');if(!isOpen('topics'))return h;
   return h+'<div class="nk">'+subs.map(s=>{const k='s'+s.id,ps=projs(s.id),used=new Set();let c='';
-    if(isOpen(k)){(s.topics||[]).forEach((t,ti)=>{const sub=t.startsWith('-'),mine=ps.filter(p=>p.topic===t),tk='t'+s.id+'_'+ti,act=topicActive(me.id,s,t),dn=mine.length>0&&mine.every(p=>passed(me.id,p.id)),lab=(sub?'↳ ':'')+esc(t.replace(/^-\s*/,''));mine.forEach(p=>used.add(p.id));
+    const sAct=subjActive(s);
+    if(isOpen(k)||!sAct){(s.topics||[]).forEach((t,ti)=>{const sub=t.startsWith('-'),mine=ps.filter(p=>p.topic===t),tk='t'+s.id+'_'+ti,act=topicActive(me.id,s,t),dn=mine.length>0&&mine.every(p=>passed(me.id,p.id)),lab=(sub?'↳ ':'')+esc(t.replace(/^-\s*/,''));mine.forEach(p=>used.add(p.id));
         c+=`<div class="nk" style="${sub?'margin-left:28px':''}">`+(act?nh(tk,(dn?'✓ ':'')+lab,` <span class="mu">(${mine.length})</span>`)+(isOpen(tk)?(mine.length?mine.map(p=>aBtn(p,ps)).join(''):'<div class="mu nk">No assignments yet</div>'):''):`<div class="nh lock">${mine.length?'🔒':'○'} ${lab} <span class="mu">(${mine.length})</span></div>`)+'</div>'});
       const rest=ps.filter(p=>!used.has(p.id));if(rest.length)c+='<div class="nk"><div class="mu" style="padding:5px 4px">Other assignments</div>'+rest.map(p=>aBtn(p,ps)).join('')+'</div>'}
     const n=ps.filter(p=>passed(me.id,p.id)).length;
-    const q=seq(s.id),sAct=!q.length||unlocked(me.id,s.id,projs(s.id).findIndex(x=>x.id===q[0].id));
-    return sAct?nh(k,'<b>'+esc(s.name)+'</b>',` <span class="mu">${n}/${ps.length}</span>`)+c:`<div class="nh lock">🔒 <b>${esc(s.name)}</b> <span class="mu">${n}/${ps.length}</span></div>`}).join('')+'</div>'}
+    return sAct?nh(k,'<b>'+esc(s.name)+'</b>',` <span class="mu">${n}/${ps.length}</span>`)+c:`<div class="nh lock">🔒 <b>${esc(s.name)}</b> <span class="mu">${n}/${ps.length} · inactive</span></div>`+c}).join('')+'</div>'}
 const donut=pc=>`<svg viewBox="0 0 120 120" width="150" height="150" role="img" aria-label="${pc}% complete"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--lk)" stroke-width="14"/><circle cx="60" cy="60" r="50" fill="none" stroke="var(--ok)" stroke-width="14" stroke-linecap="round" stroke-dasharray="${(pc*3.1416).toFixed(1)} 314.16" transform="rotate(-90 60 60)"/><text x="60" y="67" text-anchor="middle" font-size="22" font-weight="600" fill="currentColor">${pc}%</text></svg>`;
 function dashMain(subs){
   if(!subs.length)return `<div class="card"><p>No subjects are available for your account yet.</p><p class="mu">Your category is “${esc(me.category||'none')}”. Ask your teacher to check it matches the subject’s student category.</p></div>`;
@@ -232,7 +233,7 @@ function dashMain(subs){
     errs=all.filter(p=>!passed(me.id,p.id)&&reqCats(p).some(c=>!catPassed(me.id,p.id,c)&&latest(me.id,p.id,c))).length;
   return `<h2>My progress</h2><div class="card row" style="justify-content:flex-start;gap:28px">${donut(pc)}<div><div class="mu">Overall completion</div><div style="font-size:30px;font-weight:600">${done} / ${all.length}</div><div class="mu">assignments completed</div>${errs?`<p class="bad"><b>⚠ ${errs} assignment(s) have errors</b></p>`:''}</div></div>
   <div class="card"><b>Progress by subject</b>`+subs.map(s=>{const ps=projs(s.id),n=ps.filter(p=>passed(me.id,p.id)).length,q=ps.length?Math.round(n/ps.length*100):0,cur=ps.find((p,i)=>!passed(me.id,p.id)&&unlocked(me.id,s.id,i));
-    return `<div style="margin-top:12px"><div class="row"><span>${esc(s.name)}</span><span class="mu">${n} of ${ps.length} · ${q}%</span></div><div class="bar"><i style="width:${q}%"></i></div>${cur?`<span class="mu">Current: ${esc(cur.title)}</span> <button data-a="goProj" data-sid="${s.id}" data-id="${cur.id}">Continue</button>`:ps.length?(n===ps.length?'<span class="ok">All assignments complete ✓</span>':'<span class="mu">🔒 Locked until the previous assignment is complete</span>'):''}</div>`}).join('')+'</div>'}
+    return `<div style="margin-top:12px"><div class="row"><span>${esc(s.name)}</span><span class="mu">${n} of ${ps.length} · ${q}%</span></div><div class="bar"><i style="width:${q}%"></i></div>${cur?`<span class="mu">Current: ${esc(cur.title)}</span> <button data-a="goProj" data-sid="${s.id}" data-id="${cur.id}">Continue</button>`:ps.length?(n===ps.length?'<span class="ok">All assignments complete ✓</span>':(()=>{const bl=gseq().find(x=>!passed(me.id,x.id)),bs=bl&&byId('subjects',bl.subjectId);return `<span class="mu">🔒 Locked — complete ${bl?esc((bs?bs.name+' · ':'')+bl.title):'the previous assignment'} first</span>`})()):''}</div>`}).join('')+'</div>'}
 function studentView(){
   const subs=mySubjects();
   const banner=openErrors().map(x=>`<div class="card err bad">⚠ <b>${esc(x.subjectName)} – ${esc(x.projectTitle)} – ${esc(x.cat)}</b>: ${x.mism.length} error(s) in your latest submission. Your teacher has been notified. <button data-a="goProj" data-sid="${x.subjectId}" data-id="${x.projectId}">Fix &amp; resubmit</button></div>`).join('');
