@@ -74,7 +74,8 @@ const catPassed=(u,pid,c)=>S.subs.some(s=>s.userId===u&&s.projectId===pid&&s.cat
 const latest=(u,pid,c)=>S.subs.filter(s=>s.userId===u&&s.projectId===pid&&s.cat===c).sort(srt)[0];
 const passed=(u,pid)=>{const p=byId('projects',pid);return !!p&&reqCats(p).length>0&&reqCats(p).every(c=>catPassed(u,pid,c))};
 const seq=sid=>{const s=byId('subjects',sid),ts=(s&&s.topics)||[],ix=p=>{const i=ts.indexOf(p.topic);return i<0?1e6:i};return projs(sid).sort((a,b)=>ix(a)-ix(b)||a.order-b.order)};
-const unlocked=(u,sid,i)=>{const p=projs(sid)[i];if(!p)return false;const q=seq(sid),k=q.findIndex(x=>x.id===p.id);return q.slice(0,k).every(x=>passed(u,x.id))};
+const gseq=()=>mySubjects().flatMap(s=>seq(s.id));
+const unlocked=(u,sid,i)=>{const p=projs(sid)[i];if(!p)return false;const q=gseq(),k=q.findIndex(x=>x.id===p.id);return k>=0&&q.slice(0,k).every(x=>passed(u,x.id))};
 const topicActive=(u,s,t)=>{const mine=seq(s.id).filter(p=>p.topic===t);return mine.length>0&&unlocked(u,s.id,projs(s.id).findIndex(x=>x.id===mine[0].id))};
 const bname=id=>(byId('batches',id)||{}).name||'—';
 const run=async f=>{try{await f()}catch(e){msg=e.message||String(e);render()}};
@@ -180,7 +181,7 @@ function render(){
     <p><button class="p" data-a="${setup?'setup':'login'}">${setup?'Create admin':'Log in'}</button></p></div>`}
   let h=`<header><h1>Learning Portal</h1><div class="row"><span class="mu">${esc(me.name)} · ${me.role}</span><button data-a="logout">Log out</button></div></header>`;
   if(msg)h+=`<div class="card bad">${esc(msg)} <button data-a="clr">OK</button></div>`;
-  try{a.innerHTML=h+(isStaff()?staffView():studentView())}catch(e){a.innerHTML=h+'<div class="card bad">Display error: '+esc(e.message)+'</div>'}}
+  try{a.innerHTML=h+(isStaff()?staffView():studentView())+'<p class="mu" style="text-align:center;margin-top:24px">Portal version 8</p>'}catch(e){a.innerHTML=h+'<div class="card bad">Display error: '+esc(e.message)+'</div>'}}
 const tbl=(heads,rows)=>`<div class="sc"><table><tr>${heads.map(x=>`<th>${x}</th>`).join('')}</tr>${rows.join('')}</table></div>`;
 const btn=(a,id,l,c='')=>`<button class="${c}" data-a="${a}" data-id="${id}">${l}</button>`;
 function staffView(){
@@ -222,7 +223,8 @@ function sideTree(subs){
         c+=`<div class="nk" style="${sub?'margin-left:28px':''}">`+(act?nh(tk,(dn?'✓ ':'')+lab,` <span class="mu">(${mine.length})</span>`)+(isOpen(tk)?(mine.length?mine.map(p=>aBtn(p,ps)).join(''):'<div class="mu nk">No assignments yet</div>'):''):`<div class="nh lock">${mine.length?'🔒':'○'} ${lab} <span class="mu">(${mine.length})</span></div>`)+'</div>'});
       const rest=ps.filter(p=>!used.has(p.id));if(rest.length)c+='<div class="nk"><div class="mu" style="padding:5px 4px">Other assignments</div>'+rest.map(p=>aBtn(p,ps)).join('')+'</div>'}
     const n=ps.filter(p=>passed(me.id,p.id)).length;
-    return nh(k,'<b>'+esc(s.name)+'</b>',` <span class="mu">${n}/${ps.length}</span>`)+c}).join('')+'</div>'}
+    const q=seq(s.id),sAct=!q.length||unlocked(me.id,s.id,projs(s.id).findIndex(x=>x.id===q[0].id));
+    return sAct?nh(k,'<b>'+esc(s.name)+'</b>',` <span class="mu">${n}/${ps.length}</span>`)+c:`<div class="nh lock">🔒 <b>${esc(s.name)}</b> <span class="mu">${n}/${ps.length}</span></div>`}).join('')+'</div>'}
 const donut=pc=>`<svg viewBox="0 0 120 120" width="150" height="150" role="img" aria-label="${pc}% complete"><circle cx="60" cy="60" r="50" fill="none" stroke="var(--lk)" stroke-width="14"/><circle cx="60" cy="60" r="50" fill="none" stroke="var(--ok)" stroke-width="14" stroke-linecap="round" stroke-dasharray="${(pc*3.1416).toFixed(1)} 314.16" transform="rotate(-90 60 60)"/><text x="60" y="67" text-anchor="middle" font-size="22" font-weight="600" fill="currentColor">${pc}%</text></svg>`;
 function dashMain(subs){
   if(!subs.length)return `<div class="card"><p>No subjects are available for your account yet.</p><p class="mu">Your category is “${esc(me.category||'none')}”. Ask your teacher to check it matches the subject’s student category.</p></div>`;
@@ -230,7 +232,7 @@ function dashMain(subs){
     errs=all.filter(p=>!passed(me.id,p.id)&&reqCats(p).some(c=>!catPassed(me.id,p.id,c)&&latest(me.id,p.id,c))).length;
   return `<h2>My progress</h2><div class="card row" style="justify-content:flex-start;gap:28px">${donut(pc)}<div><div class="mu">Overall completion</div><div style="font-size:30px;font-weight:600">${done} / ${all.length}</div><div class="mu">assignments completed</div>${errs?`<p class="bad"><b>⚠ ${errs} assignment(s) have errors</b></p>`:''}</div></div>
   <div class="card"><b>Progress by subject</b>`+subs.map(s=>{const ps=projs(s.id),n=ps.filter(p=>passed(me.id,p.id)).length,q=ps.length?Math.round(n/ps.length*100):0,cur=ps.find((p,i)=>!passed(me.id,p.id)&&unlocked(me.id,s.id,i));
-    return `<div style="margin-top:12px"><div class="row"><span>${esc(s.name)}</span><span class="mu">${n} of ${ps.length} · ${q}%</span></div><div class="bar"><i style="width:${q}%"></i></div>${cur?`<span class="mu">Current: ${esc(cur.title)}</span> <button data-a="goProj" data-sid="${s.id}" data-id="${cur.id}">Continue</button>`:ps.length?'<span class="ok">All assignments complete ✓</span>':''}</div>`}).join('')+'</div>'}
+    return `<div style="margin-top:12px"><div class="row"><span>${esc(s.name)}</span><span class="mu">${n} of ${ps.length} · ${q}%</span></div><div class="bar"><i style="width:${q}%"></i></div>${cur?`<span class="mu">Current: ${esc(cur.title)}</span> <button data-a="goProj" data-sid="${s.id}" data-id="${cur.id}">Continue</button>`:ps.length?(n===ps.length?'<span class="ok">All assignments complete ✓</span>':'<span class="mu">🔒 Locked until the previous assignment is complete</span>'):''}</div>`}).join('')+'</div>'}
 function studentView(){
   const subs=mySubjects();
   const banner=openErrors().map(x=>`<div class="card err bad">⚠ <b>${esc(x.subjectName)} – ${esc(x.projectTitle)} – ${esc(x.cat)}</b>: ${x.mism.length} error(s) in your latest submission. Your teacher has been notified. <button data-a="goProj" data-sid="${x.subjectId}" data-id="${x.projectId}">Fix &amp; resubmit</button></div>`).join('');
@@ -257,7 +259,7 @@ const topicOpts=sid=>[['','General (no topic)']].concat(((byId('subjects',sid)||
 const stuFields=(u={})=>[F('name','Name','text',u.name),F('regno','Reg. no','text',u.regno),F('batchId','Batch','select',u.batchId||'',batchOpts()),F('category','Category (from batches)','select',u.category||'',catList(u.category))];
 const batFields=(b={})=>[F('name','Batch name','text',b.name),F('category','Category','text',b.category),F('startDate','Start date','date',b.startDate),F('timing','Timing','text',b.timing),F('trainer','Trainer','text',b.trainer),F('notes','Notes','textarea',b.notes)];
 const ACT={
-  showErr(){tab='submissions';fe='err';render()},goProj(b){const p=byId('projects',b.dataset.id),sj=byId('subjects',b.dataset.sid)||{};openSet.add('topics');openSet.add('s'+sj.id);const ti=(sj.topics||[]).indexOf(p&&p.topic);if(ti>=0)openSet.add('t'+sj.id+'_'+ti);view={s:b.dataset.sid,p:b.dataset.id};render()},
+  showErr(){tab='submissions';fe='err';render()},goProj(b){const p=byId('projects',b.dataset.id),sj=byId('subjects',b.dataset.sid)||{};if(!p||!unlocked(me.id,p.subjectId,projs(p.subjectId).indexOf(p))){msg='This assignment is locked. Complete the previous assignment first.';return render()}openSet.add('topics');openSet.add('s'+sj.id);const ti=(sj.topics||[]).indexOf(p&&p.topic);if(ti>=0)openSet.add('t'+sj.id+'_'+ti);view={s:b.dataset.sid,p:b.dataset.id};render()},
   tg(b){const n=b.dataset.n;openSet.has(n)?openSet.delete(n):openSet.add(n);render()},dash(){view={};render()},
   clr(){msg='';render()},tab(b){tab=b.dataset.k;render()},back(){view={};render()},
   openSub(b){view={s:b.dataset.id};render()},openProj(b){view={s:view.s,p:b.dataset.id};render()},
@@ -304,6 +306,7 @@ const ACT={
   editSubm(b){const x=byId('subs',b.dataset.id);dlg('Edit submission — '+x.studentName+' · '+x.cat,[F('res','Result','select',x.passed?'ok':'err',[['ok','Correct (mark as passed)'],['err','Errors (student must resubmit)']]),F('note','Note (optional)','text',x.note||'')],o=>{
     const ok=o.res==='ok';return fs.doc('submissions/'+x.id).update({passed:ok,note:o.note,edited:true,editedAt:TS(),mism:ok?[]:((x.mism||[]).length?x.mism:[{name:'Marked incorrect by admin'+(o.note?': '+o.note:''),expected:[],found:null,note:true}])})})},
   submitCat(b){run(async()=>{const p=byId('projects',b.dataset.id),ci=+b.dataset.ci,c=reqCats(p)[ci],sst=$('#sst'+ci),f=document.querySelector('.rep[data-ci="'+ci+'"]').files[0];
+    if(!unlocked(me.id,p.subjectId,projs(p.subjectId).indexOf(p)))throw new Error('This assignment is locked. Complete the previous assignment first.');
     if(!f)return sst.textContent='Choose your PDF file first.';
     if(!/\.pdf$/i.test(f.name)&&f.type!=='application/pdf')return sst.textContent='Only PDF files are allowed.';
     if(f.size>20*1024*1024)return sst.textContent='File is too large (max 20 MB).';
