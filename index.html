@@ -30,7 +30,7 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 .pr2{display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:6px}ul.bad{margin:6px 0;padding-left:20px}
 .lay{display:grid;grid-template-columns:290px 1fr;gap:14px;align-items:start}@media(max-width:820px){.lay{grid-template-columns:1fr}}
 .av{width:52px;height:52px;border-radius:50%;background:var(--ac);color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:600;flex:none}
-.nh{cursor:pointer;padding:5px 4px;border-radius:6px}.nh:hover{background:var(--lk)}.nk{margin-left:12px}
+.nh{cursor:pointer;padding:5px 4px;border-radius:6px}.nh:hover{background:var(--lk)}.nh.lock,.nh.lock:hover{opacity:.5;cursor:not-allowed;background:none;color:var(--mu)}.nk{margin-left:12px}
 .ar{display:block;width:100%;text-align:left;border:0;background:none;padding:5px 6px;border-radius:6px;margin:1px 0}.ar:hover:not(:disabled){background:var(--lk)}.ar.on{background:var(--lk);font-weight:600}.ar.ok{color:var(--ok)}.ar.bad{color:var(--bad)}
 .hl{background:rgba(194,59,59,.18);color:var(--bad);padding:1px 6px;border-radius:5px;font-weight:600}
 </style></head><body><div class="w" id="app"><p class="mu">Loading…</p></div>
@@ -68,11 +68,16 @@ const byId=(c,id)=>S[c].find(x=>x.id===id);
 const isAdmin=()=>me&&me.role==='admin',isStaff=()=>me&&me.role!=='student';
 const projs=sid=>S.projects.filter(p=>p.subjectId===sid).sort((a,b)=>a.order-b.order);
 const reqCats=p=>[...new Set((p.answers||[]).map(a=>a.cat))];
+const byCreated=(a,b)=>(a.createdAt?.seconds??9e9)-(b.createdAt?.seconds??9e9)||(a.createdAt?.nanoseconds??0)-(b.createdAt?.nanoseconds??0);
 const srt=(a,b)=>(b.at?.seconds??9e9)-(a.at?.seconds??9e9);
 const catPassed=(u,pid,c)=>S.subs.some(s=>s.userId===u&&s.projectId===pid&&s.cat===c&&s.passed);
 const latest=(u,pid,c)=>S.subs.filter(s=>s.userId===u&&s.projectId===pid&&s.cat===c).sort(srt)[0];
 const passed=(u,pid)=>{const p=byId('projects',pid);return !!p&&reqCats(p).length>0&&reqCats(p).every(c=>catPassed(u,pid,c))};
-const unlocked=(u,sid,i)=>i===0||passed(u,projs(sid)[i-1].id);
+const topicDone=(u,s,t)=>projs(s.id).filter(p=>p.topic===t).every(p=>passed(u,p.id));
+const topicActive=(u,s,t)=>{const ts=s.topics||[],i=ts.indexOf(t);return i<0||ts.slice(0,i).every(x=>topicDone(u,s,x))};
+const unlocked=(u,sid,i)=>{const s=byId('subjects',sid),ps=projs(sid),p=ps[i];if(!s||!p)return false;
+  if(p.topic&&(s.topics||[]).includes(p.topic)&&!topicActive(u,s,p.topic))return false;
+  const same=ps.filter(x=>(x.topic||'')===(p.topic||'')),k=same.indexOf(p);return k===0||passed(u,same[k-1].id)};
 const bname=id=>(byId('batches',id)||{}).name||'—';
 const run=async f=>{try{await f()}catch(e){msg=e.message||String(e);render()}};
 const toKey=t=>lines(t).map(l=>{const [x,...y]=l.split('=');return{label:x.trim(),value:num(y.join('='))}}).filter(k=>k.label&&!isNaN(k.value));
@@ -130,7 +135,7 @@ auth.onAuthStateChanged(async u=>{
     await start({id:u.uid,...d.data()})}
   render()});
 async function start(p){me=p;view={};tab='students';
-  const L=(k,q)=>unsubs.push(q.onSnapshot(s=>{S[k]=s.docs.map(d=>({id:d.id,...d.data()}));render()},e=>{msg=e.message;render()}));
+  const L=(k,q)=>unsubs.push(q.onSnapshot(s=>{S[k]=s.docs.map(d=>({id:d.id,...d.data()}));if(['subjects','batches','users'].includes(k))S[k].sort(byCreated);render()},e=>{msg=e.message;render()}));
   L('batches',fs.collection('batches'));L('subjects',fs.collection('subjects'));L('projects',fs.collection('projects'));
   if(isStaff()){L('users',fs.collection('users'));L('subs',fs.collection('submissions').orderBy('at','desc'))}
   else L('subs',fs.collection('submissions').where('userId','==',p.id))}
@@ -212,8 +217,8 @@ function aBtn(p,ps){const i=ps.indexOf(p),ok=passed(me.id,p.id),op=unlocked(me.i
 function sideTree(subs){
   let h=nh('topics','<b>Topics</b>');if(!isOpen('topics'))return h;
   return h+'<div class="nk">'+subs.map(s=>{const k='s'+s.id,ps=projs(s.id),used=new Set();let c='';
-    if(isOpen(k)){(s.topics||[]).forEach((t,ti)=>{const sub=t.startsWith('-'),mine=ps.filter(p=>p.topic===t),tk='t'+s.id+'_'+ti;mine.forEach(p=>used.add(p.id));
-        c+=`<div class="nk" style="${sub?'margin-left:28px':''}">`+nh(tk,(sub?'↳ ':'')+esc(t.replace(/^-\s*/,'')),` <span class="mu">(${mine.length})</span>`)+(isOpen(tk)?(mine.length?mine.map(p=>aBtn(p,ps)).join(''):'<div class="mu nk">No assignments yet</div>'):'')+'</div>'});
+    if(isOpen(k)){(s.topics||[]).forEach((t,ti)=>{const sub=t.startsWith('-'),mine=ps.filter(p=>p.topic===t),tk='t'+s.id+'_'+ti,act=topicActive(me.id,s,t),dn=mine.length>0&&mine.every(p=>passed(me.id,p.id)),lab=(sub?'↳ ':'')+esc(t.replace(/^-\s*/,''));mine.forEach(p=>used.add(p.id));
+        c+=`<div class="nk" style="${sub?'margin-left:28px':''}">`+(act?nh(tk,(dn?'✓ ':'')+lab,` <span class="mu">(${mine.length})</span>`)+(isOpen(tk)?(mine.length?mine.map(p=>aBtn(p,ps)).join(''):'<div class="mu nk">No assignments yet</div>'):''):`<div class="nh lock">🔒 ${lab} <span class="mu">(${mine.length})</span></div>`)+'</div>'});
       const rest=ps.filter(p=>!used.has(p.id));if(rest.length)c+='<div class="nk"><div class="mu" style="padding:5px 4px">Other assignments</div>'+rest.map(p=>aBtn(p,ps)).join('')+'</div>'}
     const n=ps.filter(p=>passed(me.id,p.id)).length;
     return nh(k,'<b>'+esc(s.name)+'</b>',` <span class="mu">${n}/${ps.length}</span>`)+c}).join('')+'</div>'}
