@@ -73,11 +73,9 @@ const srt=(a,b)=>(b.at?.seconds??9e9)-(a.at?.seconds??9e9);
 const catPassed=(u,pid,c)=>S.subs.some(s=>s.userId===u&&s.projectId===pid&&s.cat===c&&s.passed);
 const latest=(u,pid,c)=>S.subs.filter(s=>s.userId===u&&s.projectId===pid&&s.cat===c).sort(srt)[0];
 const passed=(u,pid)=>{const p=byId('projects',pid);return !!p&&reqCats(p).length>0&&reqCats(p).every(c=>catPassed(u,pid,c))};
-const topicDone=(u,s,t)=>projs(s.id).filter(p=>p.topic===t).every(p=>passed(u,p.id));
-const topicActive=(u,s,t)=>{const ts=s.topics||[],i=ts.indexOf(t);return i<0||ts.slice(0,i).every(x=>topicDone(u,s,x))};
-const unlocked=(u,sid,i)=>{const s=byId('subjects',sid),ps=projs(sid),p=ps[i];if(!s||!p)return false;
-  if(p.topic&&(s.topics||[]).includes(p.topic)&&!topicActive(u,s,p.topic))return false;
-  const same=ps.filter(x=>(x.topic||'')===(p.topic||'')),k=same.indexOf(p);return k===0||passed(u,same[k-1].id)};
+const seq=sid=>{const s=byId('subjects',sid),ts=(s&&s.topics)||[],ix=p=>{const i=ts.indexOf(p.topic);return i<0?1e6:i};return projs(sid).sort((a,b)=>ix(a)-ix(b)||a.order-b.order)};
+const unlocked=(u,sid,i)=>{const p=projs(sid)[i];if(!p)return false;const q=seq(sid),k=q.findIndex(x=>x.id===p.id);return q.slice(0,k).every(x=>passed(u,x.id))};
+const topicActive=(u,s,t)=>{const mine=seq(s.id).filter(p=>p.topic===t);return mine.length>0&&unlocked(u,s.id,projs(s.id).findIndex(x=>x.id===mine[0].id))};
 const bname=id=>(byId('batches',id)||{}).name||'—';
 const run=async f=>{try{await f()}catch(e){msg=e.message||String(e);render()}};
 const toKey=t=>lines(t).map(l=>{const [x,...y]=l.split('=');return{label:x.trim(),value:num(y.join('='))}}).filter(k=>k.label&&!isNaN(k.value));
@@ -103,6 +101,9 @@ async function toDrive(file,name,batch,student){
   const b64=await new Promise((ok,no)=>{const fr=new FileReader();fr.onload=()=>ok(String(fr.result).split(',')[1]);fr.onerror=()=>no(new Error('Cannot read the file.'));fr.readAsDataURL(file)});
   const r=await fetch(UPLOAD_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({secret:UPLOAD_SECRET,name,batch,student,data:b64})}),j=await r.json();
   if(!j.ok)throw new Error('Drive upload failed: '+(j.error||'unknown error'));return j.url}
+async function delDrive(url){const id=gid(url);if(!id||!UPLOAD_URL.startsWith('http'))return;
+  const r=await fetch(UPLOAD_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({secret:UPLOAD_SECRET,action:'delete',id})}),j=await r.json();if(!j.ok)throw new Error(j.error||'Drive delete failed')}
+async function wipe(refs,subs){await Promise.allSettled(subs.flatMap(x=>(x.files||[]).map(delDrive)));const b=fs.batch();refs.forEach(x=>b.delete(x));await b.commit()}
 const fmt=n=>Number(n).toLocaleString('en-IN');
 const DATE=/\b\d{1,2}[-\/.](?:\d{1,2}|[A-Za-z]{3})[-\/.]\d{2,4}\b/g,AMT=/\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+\.\d+|\d{2,}/g;
 function parseLine(t){const c=t.replace(DATE,' '),amts=(c.match(AMT)||[]).map(x=>parseFloat(x.replace(/,/g,''))).filter(x=>!isNaN(x)),
@@ -203,7 +204,7 @@ function tProjects(){return `<div class="card row"><h2>Projects</h2><button clas
 function tSubs(){let l=S.subs.filter(s=>!fb||s.batchId===fb);if(fe==='err')l=l.filter(s=>!s.passed);
   const lk=s=>(s.files||[]).map((f,i)=>`<a href="${esc(f)}" target="_blank" rel="noopener">PDF ${i+1}</a>`).join(' ');
   return `<div class="card row"><h2>Student submissions (${l.length})</h2><div class="row"><select id="fb" style="width:auto"><option value="">All batches</option>${S.batches.map(b=>`<option value="${b.id}" ${fb===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select><select id="fe" style="width:auto"><option value="">All results</option><option value="err" ${fe==='err'?'selected':''}>Errors only</option></select></div></div><div class="card">`+
-  tbl(['Date &amp; time','Reg. no','Student','Batch','Subject','Assignment','Category','Result','Mismatches','Reports'],l.map(s=>`<tr><td>${dt(s.at)}</td><td>${esc(s.regno)}</td><td>${esc(s.studentName)}</td><td>${esc(bname(s.batchId))}</td><td>${esc(s.subjectName)}</td><td>${esc(s.projectTitle)}</td><td>${esc(s.cat)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Passed':'Errors'} (${s.correct}/${s.total})</td><td>${(s.mism||[]).length?`<details><summary>${s.mism.length} mismatch(es)</summary><div style="white-space:normal;min-width:280px">${s.mism.map(m=>esc(m.name)+': expected '+m.expected.map(fmt).join(', ')+(m.found?', student has <span class="hl">'+m.found.map(fmt).join(', ')+'</span>':', <span class="hl">not found in student PDF</span>')).join('<br>')}</div></details>`:''}</td><td>${lk(s)}</td></tr>`))+'</div>'}
+  tbl(['Date &amp; time','Reg. no','Student','Batch','Subject','Assignment','Category','Result','Mismatches','Reports',...(isAdmin()?['']:[])],l.map(s=>`<tr><td>${dt(s.at)}</td><td>${esc(s.regno)}</td><td>${esc(s.studentName)}</td><td>${esc(bname(s.batchId))}</td><td>${esc(s.subjectName)}</td><td>${esc(s.projectTitle)}</td><td>${esc(s.cat)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Passed':'Errors'} (${s.correct}/${s.total})</td><td>${(s.mism||[]).length?`<details><summary>${s.mism.length} mismatch(es)</summary><div style="white-space:normal;min-width:280px">${s.mism.map(m=>m.note?esc(m.name):esc(m.name)+': expected '+m.expected.map(fmt).join(', ')+(m.found?', student has <span class="hl">'+m.found.map(fmt).join(', ')+'</span>':', <span class="hl">not found in student PDF</span>')).join('<br>')}</div></details>`:''}</td><td>${lk(s)}</td>${isAdmin()?`<td>${btn('editSubm',s.id,'Edit')} ${btn('delSubm',s.id,'Delete','d')}</td>`:''}</tr>`))+'</div>'}
 function tProgress(){const st=S.users.filter(u=>u.role==='student');
   return `<div class="card">`+tbl(['Reg. no','Name','Batch',...S.subjects.map(s=>esc(s.name)),'Last submission'],st.map(u=>{
     const last=S.subs.find(s=>s.userId===u.id);
@@ -218,7 +219,7 @@ function sideTree(subs){
   let h=nh('topics','<b>Topics</b>');if(!isOpen('topics'))return h;
   return h+'<div class="nk">'+subs.map(s=>{const k='s'+s.id,ps=projs(s.id),used=new Set();let c='';
     if(isOpen(k)){(s.topics||[]).forEach((t,ti)=>{const sub=t.startsWith('-'),mine=ps.filter(p=>p.topic===t),tk='t'+s.id+'_'+ti,act=topicActive(me.id,s,t),dn=mine.length>0&&mine.every(p=>passed(me.id,p.id)),lab=(sub?'↳ ':'')+esc(t.replace(/^-\s*/,''));mine.forEach(p=>used.add(p.id));
-        c+=`<div class="nk" style="${sub?'margin-left:28px':''}">`+(act?nh(tk,(dn?'✓ ':'')+lab,` <span class="mu">(${mine.length})</span>`)+(isOpen(tk)?(mine.length?mine.map(p=>aBtn(p,ps)).join(''):'<div class="mu nk">No assignments yet</div>'):''):`<div class="nh lock">🔒 ${lab} <span class="mu">(${mine.length})</span></div>`)+'</div>'});
+        c+=`<div class="nk" style="${sub?'margin-left:28px':''}">`+(act?nh(tk,(dn?'✓ ':'')+lab,` <span class="mu">(${mine.length})</span>`)+(isOpen(tk)?(mine.length?mine.map(p=>aBtn(p,ps)).join(''):'<div class="mu nk">No assignments yet</div>'):''):`<div class="nh lock">${mine.length?'🔒':'○'} ${lab} <span class="mu">(${mine.length})</span></div>`)+'</div>'});
       const rest=ps.filter(p=>!used.has(p.id));if(rest.length)c+='<div class="nk"><div class="mu" style="padding:5px 4px">Other assignments</div>'+rest.map(p=>aBtn(p,ps)).join('')+'</div>'}
     const n=ps.filter(p=>passed(me.id,p.id)).length;
     return nh(k,'<b>'+esc(s.name)+'</b>',` <span class="mu">${n}/${ps.length}</span>`)+c}).join('')+'</div>'}
@@ -244,7 +245,7 @@ function projectView(){const p=byId('projects',view.p),sj=byId('subjects',p.subj
   <h2>Submit your reports</h2>${op?'<p class="mu">Export each report from Tally as a PDF and upload it under its category. Errors are shown in red and your teacher is notified. You can resubmit as many times as needed. The next assignment unlocks when every category is correct.</p>':'<p class="bad">This assignment is inactive. Complete the previous assignment first.</p>'}`+
   cats.map((c,i)=>{const ok=catPassed(me.id,p.id,c),l=latest(me.id,p.id,c);
     if(ok)return `<div class="card"><b>${esc(c)}</b> <span class="ok">✓ Correct</span></div>`;
-    return `<div class="card ${l?'err':''}"><b>${esc(c)}</b>${l?` <span class="bad">⚠ ${l.mism.length} error(s) found on ${dt(l.at)}. Correct them and upload again.</span><ul class="bad">${l.mism.map(m=>`<li>${esc(m.name)} — ${m.found?'your value <span class="hl">'+m.found.map(fmt).join(', ')+'</span> is wrong':'<span class="hl">not found in your report</span>'}</li>`).join('')}</ul>`:''}
+    return `<div class="card ${l?'err':''}"><b>${esc(c)}</b>${l?` <span class="bad">⚠ ${l.mism.length} error(s) found on ${dt(l.at)}. Correct them and upload again.</span><ul class="bad">${l.mism.map(m=>`<li>${esc(m.name)}${m.note?'':' — '+(m.found?'your value <span class="hl">'+m.found.map(fmt).join(', ')+'</span> is wrong':'<span class="hl">not found in your report</span>')}</li>`).join('')}</ul>`:''}
     ${op?`<label>Upload your ${esc(c)} PDF</label><input type="file" accept="application/pdf" class="rep" data-ci="${i}">
     <p><button class="p" data-a="submitCat" data-id="${p.id}" data-ci="${i}">${l?'Resubmit':'Upload'} &amp; check</button> <span id="sst${i}" class="mu"></span></p>`:''}</div>`}).join('')+
   `<div class="card"><h2>My submissions</h2>${mine.length?tbl(['Date &amp; time','Category','Result','File'],mine.map(s=>`<tr><td>${dt(s.at)}</td><td>${esc(s.cat)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Correct':'Errors ('+s.mism.length+')'}</td><td>${(s.files||[]).map(f=>`<a href="${esc(f)}" target="_blank" rel="noopener">PDF</a>`).join(' ')||'—'}</td></tr>`)):'<p class="mu">None yet.</p>'}</div>`}
@@ -272,7 +273,7 @@ const ACT={
   addStaff(){dlg('Add teacher / admin',[F('username','Login username'),F('password','Password (6+ chars)'),F('name','Name'),F('role','Role','select','teacher',[['teacher','Teacher'],['admin','Admin']])],async o=>{
     const id=await mkUser(o.username,o.password);await fs.doc('users/'+id).set({role:o.role,username:o.username,name:o.name,createdAt:TS(),updatedAt:TS()})})},
   editStaff(b){const u=byId('users',b.dataset.id);dlg('Edit '+u.username,[F('name','Name','text',u.name),F('role','Role','select',u.role,[['teacher','Teacher'],['admin','Admin']])],o=>fs.doc('users/'+u.id).update({...o,updatedAt:TS()}))},
-  delUser(b){if(confirm('Delete this account? Its login stops working immediately.'))run(()=>fs.doc('users/'+b.dataset.id).delete())},
+  delUser(b){const id=b.dataset.id,subs=S.subs.filter(x=>x.userId===id);if(confirm('Delete this account'+(subs.length?' and its '+subs.length+' submission(s) with the PDFs in Drive':'')+'? The login stops working immediately.'))run(()=>wipe([fs.doc('users/'+id),...subs.map(x=>fs.doc('submissions/'+x.id))],subs))},
   addBat(){dlg('Add batch',batFields(),o=>fs.collection('batches').add({...o,createdAt:TS(),updatedAt:TS()}))},
   editBat(b){const x=byId('batches',b.dataset.id);dlg('Edit batch',batFields(x),o=>fs.doc('batches/'+x.id).update({...o,updatedAt:TS()}))},
   delBat(b){if(confirm('Delete batch?'))run(()=>fs.doc('batches/'+b.dataset.id).delete())},
@@ -284,7 +285,7 @@ const ACT={
   editSubj(b){const s=byId('subjects',b.dataset.id);dlg('Edit subject',[F('name','Subject','text',s.name),F('category','Student category (none = all students)','select',s.category||'',catList(s.category)),
     {...F('topics','Topics and sub-topics','topics',parseTopics(s.topics)),btn:'+ Add topic'},{...F('cats','Assignment submit categories','list',[...(s.cats||[]),'']),ph:'Category name',btn:'+ Add category'}],o=>{
     if(!o.cats.length)throw new Error('Add at least one assignment category.');return fs.doc('subjects/'+s.id).update({name:o.name,category:o.category,topics:o.topics,cats:o.cats,updatedAt:TS()})})},
-  delSubj(b){if(confirm('Delete subject?'))run(()=>fs.doc('subjects/'+b.dataset.id).delete())},
+  delSubj(b){const id=b.dataset.id,ps=S.projects.filter(p=>p.subjectId===id),subs=S.subs.filter(x=>x.subjectId===id);if(confirm('Delete this subject, its '+ps.length+' assignment(s) and '+subs.length+' student submission(s) (including PDFs in Drive)?'))run(()=>wipe([fs.doc('subjects/'+id),...ps.map(p=>fs.doc('projects/'+p.id)),...subs.map(x=>fs.doc('submissions/'+x.id))],subs))},
   addProj(){const cats=id=>(byId('subjects',id)||{}).cats||[];
     dlg('Add assignment',[F('subjectId','Subject','select',S.subjects[0].id,S.subjects.map(s=>[s.id,s.name])),
       {...F('topic','Topic / sub-topic (from the subject syllabus)','select','',topicOpts),dep:'subjectId'},
@@ -298,7 +299,10 @@ const ACT={
       {...F('answers','Answer PDFs by submit category (use + to add more)','pairs',p.answers||[],cats),dep:'_'}],async o=>{
       if(!o.answers.length)throw new Error('Add at least one answer PDF.');o.answers.forEach(a=>a.url=dview(a.url));
       const d={topic:o.topic,title:o.title,order:+o.order||p.order,answers:o.answers,updatedAt:TS()};if(o.link)d.pdfUrl=dview(o.link);await fs.doc('projects/'+p.id).update(d)})},
-  delProj(b){if(confirm('Delete project?'))run(()=>fs.doc('projects/'+b.dataset.id).delete())},
+  delProj(b){const id=b.dataset.id,subs=S.subs.filter(x=>x.projectId===id);if(confirm('Delete this assignment and its '+subs.length+' student submission(s) (including PDFs in Drive)?'))run(()=>wipe([fs.doc('projects/'+id),...subs.map(x=>fs.doc('submissions/'+x.id))],subs))},
+  delSubm(b){const x=byId('subs',b.dataset.id);if(confirm('Delete this submission and its PDF in Drive? The student can then upload again.'))run(()=>wipe([fs.doc('submissions/'+x.id)],[x]))},
+  editSubm(b){const x=byId('subs',b.dataset.id);dlg('Edit submission — '+x.studentName+' · '+x.cat,[F('res','Result','select',x.passed?'ok':'err',[['ok','Correct (mark as passed)'],['err','Errors (student must resubmit)']]),F('note','Note (optional)','text',x.note||'')],o=>{
+    const ok=o.res==='ok';return fs.doc('submissions/'+x.id).update({passed:ok,note:o.note,edited:true,editedAt:TS(),mism:ok?[]:((x.mism||[]).length?x.mism:[{name:'Marked incorrect by admin'+(o.note?': '+o.note:''),expected:[],found:null,note:true}])})})},
   submitCat(b){run(async()=>{const p=byId('projects',b.dataset.id),ci=+b.dataset.ci,c=reqCats(p)[ci],sst=$('#sst'+ci),f=document.querySelector('.rep[data-ci="'+ci+'"]').files[0];
     if(!f)return sst.textContent='Choose your PDF file first.';
     if(!/\.pdf$/i.test(f.name)&&f.type!=='application/pdf')return sst.textContent='Only PDF files are allowed.';
