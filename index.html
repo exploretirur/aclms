@@ -300,29 +300,31 @@ const fmtDate=d=>d?String(d).split('-').reverse().join('-'):'—';
 const eProg=(u,pid)=>byId('prog',u+'_'+pid)||{done:0,log:[]};
 const eDone=(u,p)=>Math.min(eProg(u,p.id).done||0,(p.entries||[]).length);
 let gw=null,guide={};
-const GCSS='body{margin:0;padding:12px;font:14px system-ui,sans-serif;background:#101828;color:#f2f4f7}.h{font-weight:600}.b{height:6px;background:#344054;border-radius:4px;margin:8px 0}.b i{display:block;height:100%;background:#32d583;border-radius:4px}.c{background:#1d2939;border-radius:10px;padding:12px;margin:8px 0;animation:in .4s}.d{color:#98a2b3;font-size:12px}.t{font-weight:700;color:#7cd4fd;margin:2px 0}.x{font-size:15px;margin:6px 0}.a{font-size:20px;font-weight:700;color:#fec84b}.w{text-align:center;padding:36px 0;color:#98a2b3;animation:pl 1s infinite}.s{font-size:12px;color:#98a2b3;margin:6px 0}.r{display:flex;gap:8px;justify-content:flex-end}button{font:inherit;padding:7px 11px;border-radius:8px;border:1px solid #475467;background:#1d2939;color:#fff;cursor:pointer}button.p{background:#2f5bea;border-color:#2f5bea}@keyframes in{from{opacity:0;transform:translateY(-8px)}}@keyframes pl{50%{opacity:.4}}';
+const GCSS='html,body{height:100%}body{margin:0;padding:0 10px;font:15px/1.35 system-ui,sans-serif;background:#101828;color:#f2f4f7;display:flex;align-items:center;gap:10px;overflow:hidden}.n{flex:none;font-size:12px;color:#98a2b3;white-space:nowrap}.x{flex:1;min-width:0;font-size:15px;max-height:2.7em;overflow:auto}.dot{flex:none;font-size:13px;cursor:help}.r{flex:none;display:flex;gap:6px}.w{flex:1;color:#98a2b3;animation:pl 1s infinite}button{font:inherit;font-size:13px;padding:5px 10px;border-radius:7px;border:1px solid #475467;background:#1d2939;color:#fff;cursor:pointer;white-space:nowrap}button.p{background:#2f5bea;border-color:#2f5bea}@keyframes pl{50%{opacity:.4}}';
 async function openGuide(pid){
   const p=byId('projects',pid);if(!p||!(p.entries||[]).length)return;
   closeGuide();guide={pid,waiting:false,bridge:null,tl:''};if(DESK&&window.desktop.launchTally)window.desktop.launchTally().catch(()=>{});
-  try{if(!DESK&&window.documentPictureInPicture)gw=await documentPictureInPicture.requestWindow({width:390,height:390})}catch(e){gw=null}
-  if(!gw)gw=window.open('','portal_entry_guide','popup=yes,width=410,height=410');
+  const W=Math.min(1000,Math.round((screen.availWidth||1200)*.8)),H=96,L=Math.round(((screen.availWidth||1200)-W)/2),T=(screen.availHeight||700)-H-50;
+  try{if(!DESK&&window.documentPictureInPicture)gw=await documentPictureInPicture.requestWindow({width:W,height:H})}catch(e){gw=null}
+  if(!gw)gw=window.open('','portal_entry_guide',`popup=yes,width=${W},height=${H+30},left=${L},top=${T}`);
   if(!gw){msg='Please allow pop-ups for this site to use the entry guide.';return render()}
-  gw.document.head.innerHTML='<meta charset="utf-8"><title>Live entry guide</title><style>'+GCSS+'</style>';
+  try{gw.resizeTo(W,H+(gw.outerHeight-gw.innerHeight));gw.moveTo(L,T)}catch(e){}
+  gw.document.head.innerHTML='<meta charset="utf-8"><title>Entry</title><style>'+GCSS+'</style>';
   gw.document.addEventListener('click',onGuideClick);gw.addEventListener('pagehide',()=>closeGuide());
-  if(window.Notification&&Notification.permission==='default')Notification.requestPermission();
   guide.timer=setInterval(()=>checkTally(true),6000);
   renderGuide();notifyCurrent();checkTally(true)}
 function closeGuide(){clearInterval(guide.timer);const w=gw;gw=null;try{if(w&&!w.closed)w.close()}catch(e){}}
 function onGuideClick(e){const b=e.target.closest('[data-g]');if(!b)return;const a=b.dataset.g;if(a==='next')advance('manual');else if(a==='check')checkTally(false);else if(a==='close')closeGuide()}
+const eLine=e=>{const d=String(e.date||'').split('-');return(d.length===3?`${+d[2]}/${+d[1]}/${d[0]} `:'')+String(e.text||'').trim()};
 function renderGuide(){
   if(!gw||gw.closed||!me)return;const p=byId('projects',guide.pid);if(!p)return;
   const es=p.entries||[],n=eDone(me.id,p),e=es[n],body=gw.document.body;
-  if(!e){body.innerHTML=`<div class="c"><div class="t">🎉 All ${es.length} entries completed</div><div class="x">Now export the reports from Tally as PDF and upload them in the portal.</div></div><div class="r"><button class="p" data-g="close">Close</button></div>`;return}
-  const st=guide.bridge===false?'⚪ Tally not linked — '+(DESK?'start TallyPrime and enable its server (Tally menu), or ':'')+'confirm each entry manually.'+(guide.err?'<br><small>'+esc(guide.err)+'</small>':''):guide.tl==='nodate'?'🟢 Tally linked — this entry has no date, so confirm it manually.':guide.tl==='tallyerr'?'🟠 Tally answered: '+esc(guide.err||'')+' — check that the company is open and the date is inside its financial year.':guide.tl==='notfound'?'🟡 Tally linked — this entry is not posted yet'+(e.date?' (date '+fmtDate(e.date)+')':'')+'.':guide.bridge?'🟢 Tally linked — your entry is detected automatically.':'… checking Tally link';
-  body.innerHTML=`<div class="h">${esc(p.title)} · Entry ${n+1} of ${es.length}</div><div class="b"><i style="width:${Math.round(n/es.length*100)}%"></i></div>`+
-   (guide.waiting?'<div class="w">📨 Next transaction arriving…</div>':`<div class="c"><div class="d">📅 ${fmtDate(e.date)}</div><div class="t">${esc(e.type)} voucher</div><div class="x">${esc(e.text)}</div>${e.amount?`<div class="a">₹ ${fmt(e.amount)}</div>`:''}</div><div class="s">${st}</div><div class="r">${guide.bridge?'<button data-g="check">Check in Tally</button>':''}<button class="p" data-g="next">✓ I have entered it</button></div>`)}
-function notifyCurrent(){const p=byId('projects',guide.pid);if(!p||!window.Notification||Notification.permission!=='granted')return;const es=p.entries||[],n=eDone(me.id,p),e=es[n];if(!e)return;
-  try{new Notification('Entry '+(n+1)+' of '+es.length+' · '+e.type,{body:(e.date?fmtDate(e.date)+' — ':'')+e.text+(e.amount?' · ₹'+fmt(e.amount):''),tag:'portal-entry',requireInteraction:true})}catch(x){}}
+  if(!e){body.innerHTML=`<div class="x">🎉 All ${es.length} entries completed. Export the reports from Tally as PDF and upload them in the portal.</div><div class="r"><button class="p" data-g="close">Close</button></div>`;return}
+  const st=guide.bridge===false?'⚪ Tally not linked — confirm each entry manually.'+(guide.err?' ('+esc(guide.err)+')':''):guide.tl==='nodate'?'🟢 Tally linked — no date on this entry, confirm manually.':guide.tl==='tallyerr'?'🟠 Tally: '+esc(guide.err||'')+' — check the company is open and the date is in its financial year.':guide.tl==='notfound'?'🟡 Not posted in Tally yet.':guide.bridge?'🟢 Tally linked — detected automatically.':'… checking Tally';
+  const dot=st.slice(0,2);
+  body.innerHTML=`<div class="n" title="${esc(p.title)}">${n+1}/${es.length}</div>`+
+   (guide.waiting?'<div class="w">Next entry…</div>':`<div class="x" title="${esc(st)}">${esc(eLine(e))}</div><div class="dot" title="${esc(st.slice(2))}">${dot}</div><div class="r">${guide.bridge?'<button data-g="check">Check</button>':''}<button class="p" data-g="next">✓ Done</button></div>`)}
+function notifyCurrent(){}
 async function advance(how){
   const p=byId('projects',guide.pid);if(!p||guide.waiting)return;const n=eDone(me.id,p);if(n>=(p.entries||[]).length)return;
   guide.waiting=true;renderGuide();
