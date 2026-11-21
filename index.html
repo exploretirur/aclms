@@ -190,13 +190,29 @@ function dlg(title,fields,save){
   const multi=f=>f.t==='list'||f.t==='pairs'||f.t==='topics'||f.t==='entries';
   const d=document.createElement('dialog');
   d.innerHTML=`<form method="dialog"><h2>${esc(title)}</h2>`+fields.map(f=>`<label>${esc(f.l)}</label>`+
-    (f.t==='select'?`<select name="${f.k}">${optsOf(f,f.dep?init(get(f.dep)):'').map(([v,l])=>`<option value="${esc(v)}" ${v===f.v?'selected':''}>${esc(l)}</option>`).join('')}</select>`:
+    (f.t==='select'?`<div ${f.add?'style="display:flex;gap:6px"':''}><select name="${f.k}">${optsOf(f,f.dep?init(get(f.dep)):'').map(([v,l])=>`<option value="${esc(v)}" ${v===f.v?'selected':''}>${esc(l)}</option>`).join('')}</select>${f.add?`<button type="button" class="addtp" data-k="${f.k}" title="Add a new topic / sub-topic" style="flex:none;font-weight:700">＋</button>`:''}</div>${f.add?`<div class="tpn card" data-k="${f.k}" hidden style="padding:8px;margin:6px 0"><input class="nt" list="dl_${f.k}" placeholder="Topic name (type new, or pick an existing one)"><datalist id="dl_${f.k}"></datalist><input class="ns" style="margin-top:6px" placeholder="Sub-topic name (optional)"><div class="tpm mu" style="margin-top:4px"></div><div style="margin-top:6px;display:flex;gap:6px"><button type="button" class="p tpok">Save topic</button><button type="button" class="tpx">Cancel</button></div></div>`:''}`:
      f.t==='textarea'?`<textarea name="${f.k}">${esc(f.v)}</textarea>`:
      multi(f)?`<div data-k="${f.k}">${(f.v&&f.v.length?f.v:[f.t==='list'?'':undefined]).map(x=>rowHTML(f,x)).join('')}</div><button type="button" class="addrow" data-k="${f.k}">${esc(f.btn||'+ Add')}</button>${f.t==='entries'?` <button type="button" class="xtr" data-k="${f.k}">📄 Fill from question PDF</button><div class="mu" data-xs="${f.k}"></div>`:''}`:
      `<input name="${f.k}" type="${f.t}" value="${esc(f.v)}">`)).join('')+
     '<p class="row" style="justify-content:flex-start;flex-direction:row-reverse"><button class="p" value="ok">Save</button><button value="x">Cancel</button></p></form>';
   document.body.appendChild(d);d.showModal();
-  d.addEventListener('click',e=>{const xb=e.target.closest('.xtr');if(xb)return fillEntries(xb,d,get);const sb=e.target.closest('.addsub');if(sb){sb.previousElementSibling.insertAdjacentHTML('beforeend','<input class="sp" style="margin-top:6px" placeholder="Sub-topic (if any)">');return}
+  d.addEventListener('click',async e=>{
+    const ab=e.target.closest('.addtp'),px=e.target.closest('.tpx'),pk=e.target.closest('.tpok');
+    if(ab||px||pk){const k=(ab||px||pk).dataset.k||(px||pk).closest('.tpn').dataset.k,f=get(k),pn=d.querySelector(`.tpn[data-k="${k}"]`),sel=d.querySelector(`select[name="${k}"]`),msgEl=pn.querySelector('.tpm'),
+      sid=f.sid?f.sid():d.querySelector('select[name="subjectId"]').value,sj=byId('subjects',sid);
+      if(ab){pn.hidden=!pn.hidden;msgEl.textContent='';d.querySelector('#dl_'+k).innerHTML=((sj&&sj.topics)||[]).filter(x=>!x.startsWith('-')).map(x=>`<option value="${esc(x)}">`).join('');if(!pn.hidden)pn.querySelector('.nt').focus();return}
+      if(px){pn.hidden=true;return}
+      const name=pn.querySelector('.nt').value.trim().replace(/^-+\s*/,''),sub=pn.querySelector('.ns').value.trim().replace(/^-+\s*/,'');
+      if(!sj){msgEl.textContent='Select a subject first.';return}if(!name){msgEl.textContent='Type the topic name.';return}
+      const arr=[...(sj.topics||[])];let i=arr.findIndex(x=>!x.startsWith('-')&&x.trim().toLowerCase()===name.toLowerCase());if(i<0){arr.push(name);i=arr.length-1}
+      let chosen=arr[i];if(sub){let j=i+1;while(j<arr.length&&arr[j].startsWith('-'))j++;const ex=arr.slice(i+1,j).findIndex(x=>x.replace(/^-\s*/,'').toLowerCase()===sub.toLowerCase());if(ex<0)arr.splice(j,0,'-'+sub);chosen=ex<0?'-'+sub:arr[i+1+ex]}
+      pk.disabled=true;msgEl.textContent='Saving…';
+      try{await fs.doc('subjects/'+sid).update({topics:arr,updatedAt:TS()});sj.topics=arr;
+        sel.innerHTML=topicOpts(sid).map(([v,l])=>`<option value="${esc(v)}">${esc(l)}</option>`).join('');sel.value=chosen;
+        pn.querySelector('.nt').value='';pn.querySelector('.ns').value='';pn.hidden=true}
+      catch(x){msgEl.textContent='Could not save: '+((x&&x.message)||x)}
+      pk.disabled=false;return}
+    const xb=e.target.closest('.xtr');if(xb)return fillEntries(xb,d,get);const sb=e.target.closest('.addsub');if(sb){sb.previousElementSibling.insertAdjacentHTML('beforeend','<input class="sp" style="margin-top:6px" placeholder="Sub-topic (if any)">');return}
     const b=e.target.closest('.addrow');if(!b)return;const f=get(b.dataset.k);d.querySelector(`div[data-k="${f.k}"]`).insertAdjacentHTML('beforeend',rowHTML(f))});
   fields.forEach(df=>{const sel=d.querySelector(`select[name="${df.k}"]`),kids=fields.filter(f=>f.dep===df.k);if(!sel||!kids.length)return;
     sel.onchange=()=>kids.forEach(f=>{if(f.t==='pairs'){f.opts=f.o(sel.value);d.querySelectorAll(`div[data-k="${f.k}"] .pc`).forEach(x=>{const cur=x.value;x.innerHTML=f.opts.map(o=>`<option ${o===cur?'selected':''}>${esc(o)}</option>`).join('')})}
@@ -450,7 +466,7 @@ const ACT={
   delSubj(b){const id=b.dataset.id,ps=S.projects.filter(p=>p.subjectId===id),subs=S.subs.filter(x=>x.subjectId===id);if(confirm('Delete this subject, its '+ps.length+' assignment(s) and '+subs.length+' student submission(s) (including PDFs in Drive)?'))run(()=>wipe([fs.doc('subjects/'+id),...ps.map(p=>fs.doc('projects/'+p.id)),...subs.map(x=>fs.doc('submissions/'+x.id)),...S.prog.filter(x=>ps.some(p=>p.id===x.projectId)).map(x=>fs.doc('entryProg/'+x.id))],subs))},
   addProj(){const cats=id=>(byId('subjects',id)||{}).cats||[];
     dlg('Add assignment',[F('subjectId','Subject','select',S.subjects[0].id,S.subjects.map(s=>[s.id,s.name])),
-      {...F('topic','Topic / sub-topic (from the subject syllabus)','select','',topicOpts),dep:'subjectId'},
+      {...F('topic','Topic / sub-topic (use ＋ to add a new one)','select','',topicOpts),dep:'subjectId',add:1},
       F('title','Assignment title'),F('link','Assignment question PDF — Google Drive link (Anyone with the link → Viewer)'),
       {...F('answers','Answer PDFs — choose the submit category, paste its Drive link, and use + to add more','pairs',[],cats),dep:'subjectId'},
       {...F('entries','Day-by-day entries — shown one by one to the student in the live entry guide (optional)','entries',[]),btn:'+ Add entry'}],async o=>{
@@ -458,7 +474,7 @@ const ACT={
       o.answers.forEach(a=>a.url=dview(a.url));
       await fs.collection('projects').add({subjectId:o.subjectId,topic:o.topic,title:o.title,pdfUrl:url,answers:o.answers,entries:o.entries,order:projs(o.subjectId).length+1,createdAt:TS(),updatedAt:TS()})})},
   editProj(b){const p=byId('projects',b.dataset.id),sj=byId('subjects',p.subjectId)||{},cats=()=>[...new Set([...(sj.cats||[]),...(p.answers||[]).map(a=>a.cat)])];
-    dlg('Edit assignment',[{...F('topic','Topic / sub-topic','select',p.topic||'',()=>topicOpts(p.subjectId)),dep:'_'},F('title','Title','text',p.title),F('order','Order (1 = first, unlocks in this order)','number',p.order),F('link','New question PDF link (blank = keep current)'),
+    dlg('Edit assignment',[{...F('topic','Topic / sub-topic (use ＋ to add a new one)','select',p.topic||'',()=>topicOpts(p.subjectId)),dep:'_',add:1,sid:()=>p.subjectId},F('title','Title','text',p.title),F('order','Order (1 = first, unlocks in this order)','number',p.order),F('link','New question PDF link (blank = keep current)'),
       {...F('answers','Answer PDFs by submit category (use + to add more)','pairs',p.answers||[],cats),dep:'_'},
       {...F('entries','Day-by-day entries (one by one in the live entry guide)','entries',p.entries||[]),btn:'+ Add entry',src:()=>p.pdfUrl}],async o=>{
       if(!o.answers.length)throw new Error('Add at least one answer PDF.');o.answers.forEach(a=>a.url=dview(a.url));
