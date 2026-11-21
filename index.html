@@ -192,11 +192,11 @@ function dlg(title,fields,save){
   d.innerHTML=`<form method="dialog"><h2>${esc(title)}</h2>`+fields.map(f=>`<label>${esc(f.l)}</label>`+
     (f.t==='select'?`<select name="${f.k}">${optsOf(f,f.dep?init(get(f.dep)):'').map(([v,l])=>`<option value="${esc(v)}" ${v===f.v?'selected':''}>${esc(l)}</option>`).join('')}</select>`:
      f.t==='textarea'?`<textarea name="${f.k}">${esc(f.v)}</textarea>`:
-     multi(f)?`<div data-k="${f.k}">${(f.v&&f.v.length?f.v:[f.t==='list'?'':undefined]).map(x=>rowHTML(f,x)).join('')}</div><button type="button" class="addrow" data-k="${f.k}">${esc(f.btn||'+ Add')}</button>`:
+     multi(f)?`<div data-k="${f.k}">${(f.v&&f.v.length?f.v:[f.t==='list'?'':undefined]).map(x=>rowHTML(f,x)).join('')}</div><button type="button" class="addrow" data-k="${f.k}">${esc(f.btn||'+ Add')}</button>${f.t==='entries'?` <button type="button" class="xtr" data-k="${f.k}">📄 Fill from question PDF</button><div class="mu" data-xs="${f.k}"></div>`:''}`:
      `<input name="${f.k}" type="${f.t}" value="${esc(f.v)}">`)).join('')+
     '<p class="row" style="justify-content:flex-start;flex-direction:row-reverse"><button class="p" value="ok">Save</button><button value="x">Cancel</button></p></form>';
   document.body.appendChild(d);d.showModal();
-  d.addEventListener('click',e=>{const sb=e.target.closest('.addsub');if(sb){sb.previousElementSibling.insertAdjacentHTML('beforeend','<input class="sp" style="margin-top:6px" placeholder="Sub-topic (if any)">');return}
+  d.addEventListener('click',e=>{const xb=e.target.closest('.xtr');if(xb)return fillEntries(xb,d,get);const sb=e.target.closest('.addsub');if(sb){sb.previousElementSibling.insertAdjacentHTML('beforeend','<input class="sp" style="margin-top:6px" placeholder="Sub-topic (if any)">');return}
     const b=e.target.closest('.addrow');if(!b)return;const f=get(b.dataset.k);d.querySelector(`div[data-k="${f.k}"]`).insertAdjacentHTML('beforeend',rowHTML(f))});
   fields.forEach(df=>{const sel=d.querySelector(`select[name="${df.k}"]`),kids=fields.filter(f=>f.dep===df.k);if(!sel||!kids.length)return;
     sel.onchange=()=>kids.forEach(f=>{if(f.t==='pairs'){f.opts=f.o(sel.value);d.querySelectorAll(`div[data-k="${f.k}"] .pc`).forEach(x=>{const cur=x.value;x.innerHTML=f.opts.map(o=>`<option ${o===cur?'selected':''}>${esc(o)}</option>`).join('')})}
@@ -216,7 +216,7 @@ function render(){
     <p><button class="p" data-a="${setup?'setup':'login'}">${setup?'Create admin':'Log in'}</button></p></div>`}
   let h=`<header><h1>Learning Portal</h1><div class="row"><span class="mu">${esc(me.name)} · ${me.role}</span><button data-a="logout">Log out</button></div></header>`;
   if(msg)h+=`<div class="card bad">${esc(msg)} <button data-a="clr">OK</button></div>`;
-  try{a.innerHTML=h+(isStaff()?staffView():studentView())+'<p class="mu" style="text-align:center;margin-top:24px">Portal version 10'+(DESK?' · Desktop app':'')+'</p>';renderGuide()}catch(e){a.innerHTML=h+'<div class="card bad">Display error: '+esc(e.message)+'</div>'}}
+  try{a.innerHTML=h+(isStaff()?staffView():studentView())+'<p class="mu" style="text-align:center;margin-top:24px">Portal version 11'+(DESK?' · Desktop app':'')+'</p>';renderGuide()}catch(e){a.innerHTML=h+'<div class="card bad">Display error: '+esc(e.message)+'</div>'}}
 const tbl=(heads,rows)=>`<div class="sc"><table><tr>${heads.map(x=>`<th>${x}</th>`).join('')}</tr>${rows.join('')}</table></div>`;
 const btn=(a,id,l,c='')=>`<button class="${c}" data-a="${a}" data-id="${id}">${l}</button>`;
 function staffView(){
@@ -340,6 +340,75 @@ async function checkTally(silent){
   const p=byId('projects',guide.pid);if(!p||!gw||gw.closed||guide.waiting)return;const e=(p.entries||[])[eDone(me.id,p)];if(!e)return;
   try{if(!e.date){guide.bridge=guide.bridge??null;return renderGuide()}const t=await tallyDayBook(e.date);guide.bridge=true;if(entryFound(t,e)){guide.tl='found';return advance('tally')}guide.tl='notfound'}catch(x){guide.bridge=false}
   renderGuide()}
+/* ---------- read the day-by-day entries from the question PDF ---------- */
+const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+const MN='jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
+const DPAT=[
+  [new RegExp('(?<![\\d,])(\\d{1,2})(?:st|nd|rd|th)?[\\s\\-\\/.,]*('+MN+')(?![a-z])\\.?[\\s\\-\\/.,]*(\\d{4}|\\d{2})?(?!\\d)','i'),m=>[m[1],MON[m[2].slice(0,3).toLowerCase()],m[3]]],
+  [new RegExp('('+MN+')(?![a-z])\\.?[\\s\\-\\/.]*(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?(?:[\\s,\\-\\/.]+(\\d{4}))?','i'),m=>[m[2],MON[m[1].slice(0,3).toLowerCase()],m[3]]],
+  [/(?<![\d,.])(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4}|\d{2})(?!\d)/,m=>[m[1],m[2],m[3]]]
+];
+const pad2=n=>String(n).padStart(2,'0');
+function findDate(t){let best=null;for(const[re,fn]of DPAT){const m=re.exec(t);if(m&&(!best||m.index<best.i))best={i:m.index,len:m[0].length,v:fn(m)}}return best}
+function isoDate(v,dy){const d=+v[0],m=+v[1];const y=v[2]?(v[2].length===2?2000+ +v[2]:+v[2]):dy;if(!y||!(d>=1&&d<=31)||!(m>=1&&m<=12))return'';return y+'-'+pad2(m)+'-'+pad2(d)}
+const NUMLEAD=/^\s*(?:\(?\d{1,3}[.)]\)?|(?:entry|transaction|txn|q|day)\s*[-.]?\s*\d{1,3}\s*[:.)-]?)\s+/i;
+const STOPLN=/^\s*(?:required|requirements?|instructions?|notes?|prepare|print|export)\b\s*[:\s]/i;
+const splitSent=t=>t.replace(/\bRs\.\s*/gi,'Rs ').replace(/\b(No|Mr|Mrs|Ms|Dr|St)\./g,'$1').replace(/\bM\/s\./gi,'M/s').split(/(?<=[.;])\s+(?=[A-Z0-9\u20B9(])/).map(x=>x.trim()).filter(Boolean);
+const stripLead=l=>{let t=l.replace(NUMLEAD,'');const f=findDate(t);if(f&&f.i<=2)t=t.slice(f.i+f.len);return t.replace(/^[\s:\u2013\u2014\-.,|)]+/,'').trim()};
+function guessType(t){
+  if(/deposit(?:ed)?\b.*\bbank|withdr(?:ew|awn|aw)\b.*\bbank|\bcontra\b|cash\s+(?:deposited|withdrawn)/i.test(t))return'Contra';
+  if(/credit\s+note|sales?\s+return|returned\s+by|return(?:ed)?\s+inward/i.test(t))return'Credit Note';
+  if(/debit\s+note|purchases?\s+return|return(?:ed)?\s+outward|\breturn(?:ed)?\b.*\bto\b/i.test(t))return'Debit Note';
+  if(/\breturn(?:ed)?\b/i.test(t))return'Credit Note';
+  if(/\b(?:sold|sale|sales|sell)\b/i.test(t))return'Sales';
+  if(/\b(?:purchas(?:e|ed)|bought|buy)\b/i.test(t))return'Purchase';
+  if(/\b(?:received|receipt|collected|introduced|invested|started\s+business|commenced|capital)\b/i.test(t))return'Receipt';
+  if(/\b(?:paid|payment|pay|withdrew|drawings)\b/i.test(t))return'Payment';
+  if(/\b(?:journal|adjust\w*|depreciation|outstanding|prepaid|accrued|provision|written\s+off|bad\s+debts?|transfer(?:red)?)\b/i.test(t))return'Journal';
+  return'Other'}
+function amountOf(t){
+  let c=t,f;while((f=findDate(c)))c=c.slice(0,f.i)+' '+c.slice(f.i+f.len);
+  c=c.replace(/\d+(?:\.\d+)?\s*%/g,' ').replace(/\d+(?:\.\d+)?\s*(?:percent|units?|pcs|pieces|nos|kgs?|dozens?|days?|months?|years?)\b/gi,' ');
+  const mult=s=>/^\s*(?:lakhs?|lacs?)\b/i.test(s)?1e5:/^\s*(?:crores?|cr)\b/i.test(s)?1e7:/^\s*(?:thousand|k)\b/i.test(s)?1e3:1;
+  let m=/(?:\u20B9|\brs\b\.?|\binr\b)\s*([\d,]+(?:\.\d+)?)/i.exec(c);
+  if(!m)m=/(\d+(?:\.\d+)?)(?=\s*(?:lakhs?|lacs?|crores?)\b)/i.exec(c);
+  if(!m)m=/(\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d{3,}(?:\.\d+)?)/.exec(c);
+  if(!m)return 0;
+  const v=parseFloat(m[1].replace(/,/g,''));if(isNaN(v))return 0;
+  return Math.round(v*mult(c.slice(m.index+m[0].length))*100)/100}
+function parseEntries(lines){
+  const clean=[...lines].map(l=>String(l).replace(/\s+/g,' ').trim()).filter(l=>l&&!/^\d{1,3}$/.test(l)&&!/^page\s*\d+/i.test(l));
+  const dStart=l=>{const f=findDate(l);return!!f&&f.i<=4},nStart=l=>NUMLEAD.test(l);
+  const dN=clean.filter(dStart).length,nN=clean.filter(nStart).length;
+  const mode=dN>=2&&dN>=nN?'date':nN>=2?'num':dN>=1?'date':'text';
+  let groups=[];
+  if(mode==='text'){
+    const txt=[];for(const l of clean){if(STOPLN.test(l)&&txt.length)break;txt.push(l)}
+    groups=splitSent(txt.join(' ')).filter(s=>amountOf(s)>0).map(s=>[s])
+  }else{
+    const mk=mode==='date'?dStart:nStart;let cur=null;
+    for(const l of clean){if(groups.length&&!mk(l)&&STOPLN.test(l))break;if(mk(l)){cur=[l];groups.push(cur)}else if(cur)cur.push(l)}}
+  const dateOf=g=>findDate(mode==='date'?g[0]:g.join(' '));
+  const cnt={};groups.forEach(g=>{const f=dateOf(g);if(f&&f.v[2]){const y=f.v[2].length===2?2000+ +f.v[2]:+f.v[2];cnt[y]=(cnt[y]||0)+1}});
+  const dy=+Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0]||0;
+  const out=[];
+  for(const g of groups){
+    const f=dateOf(g),date=f?isoDate(f.v,dy):'',text=stripLead(g.join(' '));
+    const withAmt=mode==='date'?splitSent(text).filter(p=>amountOf(p)>0):[];
+    const items=withAmt.length>=2?withAmt:[text];
+    for(const it of items){const t=it.replace(/\s+/g,' ').trim().slice(0,400);if(t)out.push({date,type:guessType(t),amount:amountOf(t),text:t})}}
+  return out.slice(0,200)}
+function fillEntries(xb,d,get){
+  const f=get(xb.dataset.k),box=d.querySelector(`div[data-k="${f.k}"]`),st=d.querySelector(`[data-xs="${f.k}"]`),lk=d.querySelector('[name="link"]'),
+    url=(lk&&lk.value.trim())||(f.src&&f.src())||'';
+  if(!gid(url)){st.textContent='Paste the question PDF link above first.';return}
+  if([...box.querySelectorAll('.ex')].some(i=>i.value.trim())&&!confirm('Replace the entries already in this list?'))return;
+  xb.disabled=true;st.textContent='Reading the PDF…';
+  pdfLines(url).then(ls=>{const es=parseEntries(ls);
+    if(!es.length){st.textContent='No entries could be read from this PDF. Please add them manually.';return}
+    box.innerHTML=es.map(x=>rowHTML(f,x)).join('');const nd=es.filter(x=>!x.date).length;
+    st.textContent=es.length+' entries read from the PDF'+(nd?' — '+nd+' have no date, please fill them in':'')+'. Check each one (type, date, amount), then Save.'})
+   .catch(e=>{st.textContent=e.message||String(e)}).finally(()=>{xb.disabled=false})}
 /* ---------- actions ---------- */
 const catOpts=()=>[['','—']].concat([...new Set(S.batches.map(b=>b.category).filter(Boolean))].map(c=>[c,c]));
 const batchOpts=()=>[['','— none —']].concat(S.batches.map(b=>[b.id,b.name]));
@@ -389,7 +458,7 @@ const ACT={
   editProj(b){const p=byId('projects',b.dataset.id),sj=byId('subjects',p.subjectId)||{},cats=()=>[...new Set([...(sj.cats||[]),...(p.answers||[]).map(a=>a.cat)])];
     dlg('Edit assignment',[{...F('topic','Topic / sub-topic','select',p.topic||'',()=>topicOpts(p.subjectId)),dep:'_'},F('title','Title','text',p.title),F('order','Order (1 = first, unlocks in this order)','number',p.order),F('link','New question PDF link (blank = keep current)'),
       {...F('answers','Answer PDFs by submit category (use + to add more)','pairs',p.answers||[],cats),dep:'_'},
-      {...F('entries','Day-by-day entries (one by one in the live entry guide)','entries',p.entries||[]),btn:'+ Add entry'}],async o=>{
+      {...F('entries','Day-by-day entries (one by one in the live entry guide)','entries',p.entries||[]),btn:'+ Add entry',src:()=>p.pdfUrl}],async o=>{
       if(!o.answers.length)throw new Error('Add at least one answer PDF.');o.answers.forEach(a=>a.url=dview(a.url));
       const d={topic:o.topic,title:o.title,order:+o.order||p.order,answers:o.answers,entries:o.entries,updatedAt:TS()};if(o.link)d.pdfUrl=dview(o.link);await fs.doc('projects/'+p.id).update(d)})},
   delProj(b){const id=b.dataset.id,subs=S.subs.filter(x=>x.projectId===id);if(confirm('Delete this assignment and its '+subs.length+' student submission(s) (including PDFs in Drive)?'))run(()=>wipe([fs.doc('projects/'+id),...subs.map(x=>fs.doc('submissions/'+x.id)),...S.prog.filter(x=>x.projectId===id).map(x=>fs.doc('entryProg/'+x.id))],subs))},
