@@ -33,6 +33,7 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 .nh{cursor:pointer;padding:5px 4px;border-radius:6px}.nh:hover{background:var(--lk)}.nh.lock,.nh.lock:hover{opacity:.5;cursor:not-allowed;background:none;color:var(--mu)}.nk{margin-left:12px}
 .ar{display:block;width:100%;text-align:left;border:0;background:none;padding:5px 6px;border-radius:6px;margin:1px 0}.ar:hover:not(:disabled){background:var(--lk)}.ar.on{background:var(--lk);font-weight:600}.ar.ok{color:var(--ok)}.ar.bad{color:var(--bad)}
 .hl{background:rgba(194,59,59,.18);color:var(--bad);padding:1px 6px;border-radius:5px;font-weight:600}
+.g3{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:6px}
 </style></head><body><div class="w" id="app"><p class="mu">Loading…</p></div>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
@@ -58,7 +59,7 @@ if(firebaseConfig.apiKey==='YOUR_API_KEY'){$('#app').innerHTML='<div class="card
 firebase.initializeApp(firebaseConfig);
 const auth=firebase.auth(),fs=firebase.firestore(),TS=()=>firebase.firestore.FieldValue.serverTimestamp();
 const secAuth=firebase.initializeApp(firebaseConfig,'sec').auth();
-const S={users:[],batches:[],subjects:[],projects:[],subs:[]};
+const S={users:[],batches:[],subjects:[],projects:[],subs:[],prog:[]};
 let me=null,tab='students',view={},msg='',needSetup=false,booting=true,settingUp=false,fb='',fe='',openSet=new Set(['topics']),unsubs=[];
 const em=u=>u.trim().toLowerCase().replace(/\s+/g,'')+'@portal.app';
 const dt=t=>(t&&t.toDate?t.toDate():t?new Date(t):new Date()).toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -163,7 +164,7 @@ async function mkUser(username,pw){
 /* ---------- boot / auth ---------- */
 fs.doc('meta/setup').get().then(d=>{needSetup=!d.exists;booting=false;render()}).catch(()=>{booting=false;render()});
 auth.onAuthStateChanged(async u=>{
-  unsubs.forEach(f=>f());unsubs=[];me=null;
+  unsubs.forEach(f=>f());unsubs=[];me=null;closeGuide();
   if(u&&!settingUp){const d=await fs.doc('users/'+u.uid).get();
     if(!d.exists){await auth.signOut();msg='This account has no profile or was removed.';return render()}
     await start({id:u.uid,...d.data()})}
@@ -171,12 +172,13 @@ auth.onAuthStateChanged(async u=>{
 async function start(p){me=p;view={};tab='students';
   const L=(k,q)=>unsubs.push(q.onSnapshot(s=>{S[k]=s.docs.map(d=>({id:d.id,...d.data()}));if(['subjects','batches','users'].includes(k))S[k].sort(byCreated);render()},e=>{msg=e.message;render()}));
   L('batches',fs.collection('batches'));L('subjects',fs.collection('subjects'));L('projects',fs.collection('projects'));
-  if(isStaff()){L('users',fs.collection('users'));L('subs',fs.collection('submissions').orderBy('at','desc'))}
-  else L('subs',fs.collection('submissions').where('userId','==',p.id))}
+  if(isStaff()){L('users',fs.collection('users'));L('subs',fs.collection('submissions').orderBy('at','desc'));L('prog',fs.collection('entryProg'))}
+  else{L('subs',fs.collection('submissions').where('userId','==',p.id));L('prog',fs.collection('entryProg').where('userId','==',p.id))}}
 /* ---------- dialog helper ---------- */
 const F=(k,l,t='text',v='',o=[])=>({k,l,t,v,o});
 const catSel=(opts,c='')=>`<select class="pc">${opts.map(x=>`<option ${x===c?'selected':''}>${esc(x)}</option>`).join('')}</select>`;
 const rowHTML=(f,a)=>f.t==='list'?`<div class="pr2" style="grid-template-columns:1fr"><input class="li" value="${esc(a||'')}" placeholder="${esc(f.ph||'')}"></div>`:
+  f.t==='entries'?(()=>{const A=a||{date:'',type:'Purchase',amount:'',text:''};return `<div class="er card" style="padding:8px;margin-bottom:8px"><div class="g3"><input type="date" class="ed" value="${esc(A.date)}"><select class="et">${ETYPES.map(t=>`<option ${t===A.type?'selected':''}>${t}</option>`).join('')}</select><input type="number" class="ea" placeholder="Amount ₹" value="${esc(A.amount||'')}"></div><input class="ex" style="margin-top:6px" placeholder="What the student must enter, e.g. Purchased goods from ABC Traders on credit" value="${esc(A.text)}"></div>`})():
   f.t==='topics'?(()=>{const A=a||{t:'',subs:['']};return `<div class="tb card" style="padding:8px;margin-bottom:8px"><input class="tp" placeholder="Topic" value="${esc(A.t)}"><div class="sps">${(A.subs&&A.subs.length?A.subs:['']).map(x=>`<input class="sp" style="margin-top:6px" placeholder="Sub-topic (if any)" value="${esc(x)}">`).join('')}</div><button type="button" class="addsub" style="margin-top:6px">+ Sub-topic</button></div>`})():
   `<div class="pr2">${catSel(f.opts,(a||{}).cat)}<input class="pu" placeholder="Google Drive link of answer PDF" value="${esc((a||{}).url||'')}"></div>`;
 const parseTopics=ls=>{const o=[];(ls||[]).forEach(t=>{if(t.startsWith('-')&&o.length)o[o.length-1].subs.push(t.replace(/^-\s*/,''));else o.push({t:t.replace(/^-\s*/,''),subs:[]})});return o};
@@ -185,7 +187,7 @@ function dlg(title,fields,save){
   const optsOf=(f,dv)=>f.dep?f.o(dv):f.o;
   const init=f=>f.v||(f.t==='select'?((optsOf(f,f.dep?init(get(f.dep)):'')[0])||[])[0]:'')||'';
   fields.forEach(f=>{if(f.t==='pairs')f.opts=f.o(init(get(f.dep)))});
-  const multi=f=>f.t==='list'||f.t==='pairs'||f.t==='topics';
+  const multi=f=>f.t==='list'||f.t==='pairs'||f.t==='topics'||f.t==='entries';
   const d=document.createElement('dialog');
   d.innerHTML=`<form method="dialog"><h2>${esc(title)}</h2>`+fields.map(f=>`<label>${esc(f.l)}</label>`+
     (f.t==='select'?`<select name="${f.k}">${optsOf(f,f.dep?init(get(f.dep)):'').map(([v,l])=>`<option value="${esc(v)}" ${v===f.v?'selected':''}>${esc(l)}</option>`).join('')}</select>`:
@@ -201,6 +203,7 @@ function dlg(title,fields,save){
       else d.querySelector(`select[name="${f.k}"]`).innerHTML=f.o(sel.value).map(([v,l])=>`<option value="${esc(v)}">${esc(l)}</option>`).join('')})});
   d.onclose=()=>{if(d.returnValue==='ok'){const o={};fields.forEach(f=>{
     if(f.t==='list')o[f.k]=[...d.querySelectorAll(`div[data-k="${f.k}"] .li`)].map(i=>i.value.trim()).filter(Boolean);
+    else if(f.t==='entries')o[f.k]=[...d.querySelectorAll(`div[data-k="${f.k}"] .er`)].map(x=>({date:x.querySelector('.ed').value,type:x.querySelector('.et').value,amount:parseFloat(x.querySelector('.ea').value)||0,text:x.querySelector('.ex').value.trim()})).filter(x=>x.text);
     else if(f.t==='topics'){o[f.k]=[];d.querySelectorAll(`div[data-k="${f.k}"] .tb`).forEach(b=>{const t=b.querySelector('.tp').value.trim();if(!t)return;o[f.k].push(t);b.querySelectorAll('.sp').forEach(i=>{const v=i.value.trim();if(v)o[f.k].push('-'+v)})})}
     else if(f.t==='pairs')o[f.k]=[...d.querySelectorAll(`div[data-k="${f.k}"] .pr2`)].map(x=>({cat:x.querySelector('.pc').value,url:x.querySelector('.pu').value.trim()})).filter(x=>x.url);
     else o[f.k]=d.querySelector(`[name="${f.k}"]`).value.trim()});run(()=>save(o))}d.remove()}}
@@ -213,7 +216,7 @@ function render(){
     <p><button class="p" data-a="${setup?'setup':'login'}">${setup?'Create admin':'Log in'}</button></p></div>`}
   let h=`<header><h1>Learning Portal</h1><div class="row"><span class="mu">${esc(me.name)} · ${me.role}</span><button data-a="logout">Log out</button></div></header>`;
   if(msg)h+=`<div class="card bad">${esc(msg)} <button data-a="clr">OK</button></div>`;
-  try{a.innerHTML=h+(isStaff()?staffView():studentView())+'<p class="mu" style="text-align:center;margin-top:24px">Portal version 8</p>'}catch(e){a.innerHTML=h+'<div class="card bad">Display error: '+esc(e.message)+'</div>'}}
+  try{a.innerHTML=h+(isStaff()?staffView():studentView())+'<p class="mu" style="text-align:center;margin-top:24px">Portal version 10'+(DESK?' · Desktop app':'')+'</p>';renderGuide()}catch(e){a.innerHTML=h+'<div class="card bad">Display error: '+esc(e.message)+'</div>'}}
 const tbl=(heads,rows)=>`<div class="sc"><table><tr>${heads.map(x=>`<th>${x}</th>`).join('')}</tr>${rows.join('')}</table></div>`;
 const btn=(a,id,l,c='')=>`<button class="${c}" data-a="${a}" data-id="${id}">${l}</button>`;
 function staffView(){
@@ -233,7 +236,7 @@ const topics=s=>'<ul>'+(s.topics||[]).map(t=>t.startsWith('-')?`<li style="margi
 function tSubjects(){return `<div class="card row"><h2>Subjects &amp; syllabus</h2><button class="p" data-a="addSubj">+ Add subject</button></div>`+
   S.subjects.map(s=>`<div class="card"><div class="row"><h2>${esc(s.name)} <span class="mu">${esc(s.category||'All students')} · updated ${dt(s.updatedAt)}</span></h2><div>${btn('editSubj',s.id,'Edit')} ${isAdmin()?btn('delSubj',s.id,'Delete','d'):''}</div></div><p class="mu">Assignment categories: ${(s.cats||[]).map(c=>esc(c)).join(' · ')||'—'}</p>${topics(s)}</div>`).join('')}
 function tProjects(){return `<div class="card row"><h2>Projects</h2><button class="p" data-a="addProj" ${S.subjects.length?'':'disabled'}>+ Add assignment</button></div>`+
-  S.subjects.map(s=>{const l=projs(s.id);return l.length?`<div class="card"><h2>${esc(s.name)}</h2>`+l.map(p=>`<div class="pr"><div><b>${p.order}. ${esc(p.title)}</b><div class="mu">${esc((p.topic||'General').replace(/^-\s*/,''))} · ${esc(reqCats(p).join(', '))} · <a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">PDF</a> · updated ${dt(p.updatedAt)}</div></div><div>${btn('editProj',p.id,'Edit')} ${isAdmin()?btn('delProj',p.id,'Delete','d'):''}</div></div>`).join('')+'</div>':''}).join('')}
+  S.subjects.map(s=>{const l=projs(s.id);return l.length?`<div class="card"><h2>${esc(s.name)}</h2>`+l.map(p=>`<div class="pr"><div><b>${p.order}. ${esc(p.title)}</b><div class="mu">${esc((p.topic||'General').replace(/^-\s*/,''))} · ${esc(reqCats(p).join(', '))}${(p.entries||[]).length?' · '+p.entries.length+' day entries':''} · <a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">PDF</a> · updated ${dt(p.updatedAt)}</div></div><div>${btn('editProj',p.id,'Edit')} ${isAdmin()?btn('delProj',p.id,'Delete','d'):''}</div></div>`).join('')+'</div>':''}).join('')}
 function tSubs(){let l=S.subs.filter(s=>!fb||s.batchId===fb);if(fe==='err')l=l.filter(s=>!s.passed);
   const lk=s=>(s.files||[]).map((f,i)=>`<a href="${esc(f)}" target="_blank" rel="noopener">${i?'Marked PDF':'PDF'}</a>`).join(' ');
   return `<div class="card row"><h2>Student submissions (${l.length})</h2><div class="row"><select id="fb" style="width:auto"><option value="">All batches</option>${S.batches.map(b=>`<option value="${b.id}" ${fb===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select><select id="fe" style="width:auto"><option value="">All results</option><option value="err" ${fe==='err'?'selected':''}>Errors only</option></select></div></div><div class="card">`+
@@ -273,17 +276,70 @@ function studentView(){
     <p class="mu" style="margin:10px 0 0">Reg. no: ${esc(me.regno)}<br>Batch: ${esc(bname(me.batchId))}<br>Category: ${esc(me.category||'—')}</p></div>
     <div class="card"><button data-a="dash" style="width:100%;margin-bottom:8px">📊 Dashboard</button>${sideTree(subs)}</div></aside>
     <main>${banner}${view.p&&byId('projects',view.p)?projectView():dashMain(subs)}</main></div>`}
-function projectView(){const p=byId('projects',view.p),sj=byId('subjects',p.subjectId)||{},ps=projs(p.subjectId),op=unlocked(me.id,p.subjectId,ps.indexOf(p)),cats=reqCats(p),done=passed(me.id,p.id),mine=S.subs.filter(s=>s.projectId===p.id).sort(srt);
+function projectView(){const p=byId('projects',view.p),sj=byId('subjects',p.subjectId)||{},ps=projs(p.subjectId),op=unlocked(me.id,p.subjectId,ps.indexOf(p)),cats=reqCats(p),done=passed(me.id,p.id),mine=S.subs.filter(s=>s.projectId===p.id).sort(srt),es=p.entries||[],ed=eDone(me.id,p),eok=!es.length||ed>=es.length;
   return `<p class="mu">${esc(sj.name)} › ${esc((p.topic||'General').replace(/^-\s*/,''))}</p><h2>${esc(p.title)}</h2>
   <div class="card"><iframe src="${esc(dprev(p.pdfUrl))}" title="Assignment question"></iframe><p><a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">Open in Google Drive</a></p></div>
+  ${es.length?`<div class="card"><h2>Live entry guide</h2><p class="mu">The day-by-day transactions arrive one at a time, like real work. Keep Tally open, record each entry, then confirm it to receive the next one.</p>
+    <p class="mu">${DESK?'🖥 Desktop app: Tally is detected automatically when TallyPrime is running. Otherwise confirm manually.':'Tip: the Explore Learning desktop app adds automatic Tally detection. Without it you can still confirm each entry manually.'}</p>
+    <div class="bar"><i style="width:${Math.round(ed/es.length*100)}%"></i></div><p>${ed} of ${es.length} entries completed${eok?' ✓':''}</p>
+    <button class="p" data-a="openGuide" data-id="${p.id}" ${op&&!eok?'':'disabled'}>${eok?'All entries done ✓':(ed?'▶ Continue':'▶ Start')+' live entry guide'}</button>
+    ${ed?`<details><summary class="mu">Entries completed so far</summary><ol>${es.slice(0,ed).map(e=>`<li>${fmtDate(e.date)} · ${esc(e.type)} — ${esc(e.text)}${e.amount?' · ₹'+fmt(e.amount):''}</li>`).join('')}</ol></details>`:''}</div>`:''}
   ${done?'<div class="card"><p class="ok"><b>Assignment completed ✓</b> The next assignment is now active.</p></div>':''}
-  <h2>Submit your reports</h2>${op?'<p class="mu">Export each report from Tally as a PDF and upload it under its category. Errors are shown in red and your teacher is notified. You can resubmit as many times as needed. The next assignment unlocks when every category is correct.</p>':'<p class="bad">This assignment is inactive. Complete the previous assignment first.</p>'}`+
+  <h2>Submit your reports</h2>${op&&!eok?'<p class="bad">Finish all the day-by-day entries in the live entry guide first, then upload your reports here.</p>':''}${op?'<p class="mu">Export each report from Tally as a PDF and upload it under its category. Errors are shown in red and your teacher is notified. You can resubmit as many times as needed. The next assignment unlocks when every category is correct.</p>':'<p class="bad">This assignment is inactive. Complete the previous assignment first.</p>'}`+
   cats.map((c,i)=>{const ok=catPassed(me.id,p.id,c),l=latest(me.id,p.id,c);
     if(ok)return `<div class="card"><b>${esc(c)}</b> <span class="ok">✓ Correct</span></div>`;
     return `<div class="card ${l?'err':''}"><b>${esc(c)}</b>${l?` <span class="bad">⚠ ${l.mism.length} error(s) found on ${dt(l.at)}. Correct them and upload again.</span><ol class="bad">${l.mism.map(m=>`<li>${esc(m.name)}${m.note?'':' — '+(m.found?'your value <span class="hl">'+m.found.map(fmt).join(', ')+'</span> is wrong':'<span class="hl">not found in your report</span>')}${m.hint?'<div class="mu">💡 '+esc(m.hint)+'</div>':''}</li>`).join('')}</ol>${markedPdf[p.id+'|'+c]?`<details open><summary><b>Your report with the errors marked in red</b></summary><iframe src="${markedPdf[p.id+'|'+c]}" title="Marked report"></iframe><p><a href="${markedPdf[p.id+'|'+c]}" download="marked-${esc(c)}.pdf">Download marked PDF</a></p></details>`:''}`:''}
-    ${op?`<label>Upload your ${esc(c)} PDF</label><input type="file" accept="application/pdf" class="rep" data-ci="${i}">
+    ${op&&eok?`<label>Upload your ${esc(c)} PDF</label><input type="file" accept="application/pdf" class="rep" data-ci="${i}">
     <p><button class="p" data-a="submitCat" data-id="${p.id}" data-ci="${i}">${l?'Resubmit':'Upload'} &amp; check</button> <span id="sst${i}" class="mu"></span></p>`:''}</div>`}).join('')+
   `<div class="card"><h2>My submissions</h2>${mine.length?tbl(['Date &amp; time','Category','Result','File'],mine.map(s=>`<tr><td>${dt(s.at)}</td><td>${esc(s.cat)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Correct':'Errors ('+s.mism.length+')'}</td><td>${(s.files||[]).length?'Saved ✓':'—'}</td></tr>`)):'<p class="mu">None yet.</p>'}</div>`}
+/* ---------- live entry guide + Tally link ---------- */
+const ETYPES=['Sales','Purchase','Receipt','Payment','Journal','Contra','Debit Note','Credit Note','Other'];
+const TALLY_BRIDGE='http://localhost:9100';
+const DESK=!!(window.desktop&&window.desktop.isDesktop); // true inside the Windows desktop app
+const fmtDate=d=>d?String(d).split('-').reverse().join('-'):'—';
+const eProg=(u,pid)=>byId('prog',u+'_'+pid)||{done:0,log:[]};
+const eDone=(u,p)=>Math.min(eProg(u,p.id).done||0,(p.entries||[]).length);
+let gw=null,guide={};
+const GCSS='body{margin:0;padding:12px;font:14px system-ui,sans-serif;background:#101828;color:#f2f4f7}.h{font-weight:600}.b{height:6px;background:#344054;border-radius:4px;margin:8px 0}.b i{display:block;height:100%;background:#32d583;border-radius:4px}.c{background:#1d2939;border-radius:10px;padding:12px;margin:8px 0;animation:in .4s}.d{color:#98a2b3;font-size:12px}.t{font-weight:700;color:#7cd4fd;margin:2px 0}.x{font-size:15px;margin:6px 0}.a{font-size:20px;font-weight:700;color:#fec84b}.w{text-align:center;padding:36px 0;color:#98a2b3;animation:pl 1s infinite}.s{font-size:12px;color:#98a2b3;margin:6px 0}.r{display:flex;gap:8px;justify-content:flex-end}button{font:inherit;padding:7px 11px;border-radius:8px;border:1px solid #475467;background:#1d2939;color:#fff;cursor:pointer}button.p{background:#2f5bea;border-color:#2f5bea}@keyframes in{from{opacity:0;transform:translateY(-8px)}}@keyframes pl{50%{opacity:.4}}';
+async function openGuide(pid){
+  const p=byId('projects',pid);if(!p||!(p.entries||[]).length)return;
+  closeGuide();guide={pid,waiting:false,bridge:null,tl:''};if(DESK&&window.desktop.launchTally)window.desktop.launchTally().catch(()=>{});
+  try{if(!DESK&&window.documentPictureInPicture)gw=await documentPictureInPicture.requestWindow({width:390,height:390})}catch(e){gw=null}
+  if(!gw)gw=window.open('','portal_entry_guide','popup=yes,width=410,height=410');
+  if(!gw){msg='Please allow pop-ups for this site to use the entry guide.';return render()}
+  gw.document.head.innerHTML='<meta charset="utf-8"><title>Live entry guide</title><style>'+GCSS+'</style>';
+  gw.document.addEventListener('click',onGuideClick);gw.addEventListener('pagehide',()=>closeGuide());
+  if(window.Notification&&Notification.permission==='default')Notification.requestPermission();
+  guide.timer=setInterval(()=>checkTally(true),6000);
+  renderGuide();notifyCurrent();checkTally(true)}
+function closeGuide(){clearInterval(guide.timer);const w=gw;gw=null;try{if(w&&!w.closed)w.close()}catch(e){}}
+function onGuideClick(e){const b=e.target.closest('[data-g]');if(!b)return;const a=b.dataset.g;if(a==='next')advance('manual');else if(a==='check')checkTally(false);else if(a==='close')closeGuide()}
+function renderGuide(){
+  if(!gw||gw.closed||!me)return;const p=byId('projects',guide.pid);if(!p)return;
+  const es=p.entries||[],n=eDone(me.id,p),e=es[n],body=gw.document.body;
+  if(!e){body.innerHTML=`<div class="c"><div class="t">🎉 All ${es.length} entries completed</div><div class="x">Now export the reports from Tally as PDF and upload them in the portal.</div></div><div class="r"><button class="p" data-g="close">Close</button></div>`;return}
+  const st=guide.bridge===false?'⚪ Tally not linked — '+(DESK?'start TallyPrime and enable its server (Tally menu), or ':'')+'confirm each entry manually.':guide.tl==='notfound'?'🟡 Tally linked — this entry is not posted yet'+(e.date?' (date '+fmtDate(e.date)+')':'')+'.':guide.bridge?'🟢 Tally linked — your entry is detected automatically.':'… checking Tally link';
+  body.innerHTML=`<div class="h">${esc(p.title)} · Entry ${n+1} of ${es.length}</div><div class="b"><i style="width:${Math.round(n/es.length*100)}%"></i></div>`+
+   (guide.waiting?'<div class="w">📨 Next transaction arriving…</div>':`<div class="c"><div class="d">📅 ${fmtDate(e.date)}</div><div class="t">${esc(e.type)} voucher</div><div class="x">${esc(e.text)}</div>${e.amount?`<div class="a">₹ ${fmt(e.amount)}</div>`:''}</div><div class="s">${st}</div><div class="r">${guide.bridge?'<button data-g="check">Check in Tally</button>':''}<button class="p" data-g="next">✓ I have entered it</button></div>`)}
+function notifyCurrent(){const p=byId('projects',guide.pid);if(!p||!window.Notification||Notification.permission!=='granted')return;const es=p.entries||[],n=eDone(me.id,p),e=es[n];if(!e)return;
+  try{new Notification('Entry '+(n+1)+' of '+es.length+' · '+e.type,{body:(e.date?fmtDate(e.date)+' — ':'')+e.text+(e.amount?' · ₹'+fmt(e.amount):''),tag:'portal-entry',requireInteraction:true})}catch(x){}}
+async function advance(how){
+  const p=byId('projects',guide.pid);if(!p||guide.waiting)return;const n=eDone(me.id,p);if(n>=(p.entries||[]).length)return;
+  guide.waiting=true;renderGuide();
+  try{await fs.doc('entryProg/'+me.id+'_'+p.id).set({userId:me.id,projectId:p.id,done:n+1,log:[...(eProg(me.id,p.id).log||[]),{i:n,at:Date.now(),how}],updatedAt:TS()})}catch(e){guide.waiting=false;msg='Could not save progress: '+e.message;render();return}
+  setTimeout(()=>{guide.waiting=false;guide.tl='';renderGuide();notifyCurrent()},1500)}
+async function tallyDayBook(date){const d=date.replace(/-/g,''),
+  xml=`<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Day Book</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVFROMDATE>${d}</SVFROMDATE><SVTODATE>${d}</SVTODATE></STATICVARIABLES></DESC></BODY></ENVELOPE>`;
+  if(DESK)return window.desktop.tally(xml);
+  const r=await fetch(TALLY_BRIDGE,{method:'POST',body:xml});if(!r.ok)throw new Error('Tally not reachable');return r.text()}
+function entryFound(txt,e){const body=txt.replace(/&#\d+;/g,' ');
+  if(e.type&&e.type!=='Other'&&!new RegExp(e.type.replace(/\s+/g,'\\s*'),'i').test(body))return false;
+  if(!e.amount)return /<VOUCHER|DSPVCH/i.test(body);
+  return[...body.matchAll(/>\s*(-?[\d,]+(?:\.\d+)?)\s*</g)].some(m=>Math.abs(Math.abs(parseFloat(m[1].replace(/,/g,'')))-e.amount)<=0.5)}
+async function checkTally(silent){
+  const p=byId('projects',guide.pid);if(!p||!gw||gw.closed||guide.waiting)return;const e=(p.entries||[])[eDone(me.id,p)];if(!e)return;
+  try{if(!e.date){guide.bridge=guide.bridge??null;return renderGuide()}const t=await tallyDayBook(e.date);guide.bridge=true;if(entryFound(t,e)){guide.tl='found';return advance('tally')}guide.tl='notfound'}catch(x){guide.bridge=false}
+  renderGuide()}
 /* ---------- actions ---------- */
 const catOpts=()=>[['','—']].concat([...new Set(S.batches.map(b=>b.category).filter(Boolean))].map(c=>[c,c]));
 const batchOpts=()=>[['','— none —']].concat(S.batches.map(b=>[b.id,b.name]));
@@ -293,7 +349,7 @@ const stuFields=(u={})=>[F('name','Name','text',u.name),F('regno','Reg. no','tex
 const batFields=(b={})=>[F('name','Batch name','text',b.name),F('category','Category','text',b.category),F('startDate','Start date','date',b.startDate),F('timing','Timing','text',b.timing),F('trainer','Trainer','text',b.trainer),F('notes','Notes','textarea',b.notes)];
 const ACT={
   showErr(){tab='submissions';fe='err';render()},goProj(b){const p=byId('projects',b.dataset.id),sj=byId('subjects',b.dataset.sid)||{};if(!p||!unlocked(me.id,p.subjectId,projs(p.subjectId).indexOf(p))){msg='This assignment is locked. Complete the previous assignment first.';return render()}openSet.add('topics');openSet.add('s'+sj.id);const ti=(sj.topics||[]).indexOf(p&&p.topic);if(ti>=0)openSet.add('t'+sj.id+'_'+ti);view={s:b.dataset.sid,p:b.dataset.id};render()},
-  tg(b){const n=b.dataset.n;openSet.has(n)?openSet.delete(n):openSet.add(n);render()},dash(){view={};render()},
+  tg(b){const n=b.dataset.n;openSet.has(n)?openSet.delete(n):openSet.add(n);render()},dash(){view={};render()},openGuide(b){run(()=>openGuide(b.dataset.id))},
   clr(){msg='';render()},tab(b){tab=b.dataset.k;render()},back(){view={};render()},
   openSub(b){view={s:b.dataset.id};render()},openProj(b){view={s:view.s,p:b.dataset.id};render()},
   logout(){auth.signOut()},
@@ -308,7 +364,7 @@ const ACT={
   addStaff(){dlg('Add teacher / admin',[F('username','Login username'),F('password','Password (6+ chars)'),F('name','Name'),F('role','Role','select','teacher',[['teacher','Teacher'],['admin','Admin']])],async o=>{
     const id=await mkUser(o.username,o.password);await fs.doc('users/'+id).set({role:o.role,username:o.username,name:o.name,createdAt:TS(),updatedAt:TS()})})},
   editStaff(b){const u=byId('users',b.dataset.id);dlg('Edit '+u.username,[F('name','Name','text',u.name),F('role','Role','select',u.role,[['teacher','Teacher'],['admin','Admin']])],o=>fs.doc('users/'+u.id).update({...o,updatedAt:TS()}))},
-  delUser(b){const id=b.dataset.id,subs=S.subs.filter(x=>x.userId===id);if(confirm('Delete this account'+(subs.length?' and its '+subs.length+' submission(s) with the PDFs in Drive':'')+'? The login stops working immediately.'))run(()=>wipe([fs.doc('users/'+id),...subs.map(x=>fs.doc('submissions/'+x.id))],subs))},
+  delUser(b){const id=b.dataset.id,subs=S.subs.filter(x=>x.userId===id);if(confirm('Delete this account'+(subs.length?' and its '+subs.length+' submission(s) with the PDFs in Drive':'')+'? The login stops working immediately.'))run(()=>wipe([fs.doc('users/'+id),...subs.map(x=>fs.doc('submissions/'+x.id)),...S.prog.filter(x=>x.userId===id).map(x=>fs.doc('entryProg/'+x.id))],subs))},
   addBat(){dlg('Add batch',batFields(),o=>fs.collection('batches').add({...o,createdAt:TS(),updatedAt:TS()}))},
   editBat(b){const x=byId('batches',b.dataset.id);dlg('Edit batch',batFields(x),o=>fs.doc('batches/'+x.id).update({...o,updatedAt:TS()}))},
   delBat(b){if(confirm('Delete batch?'))run(()=>fs.doc('batches/'+b.dataset.id).delete())},
@@ -320,26 +376,29 @@ const ACT={
   editSubj(b){const s=byId('subjects',b.dataset.id);dlg('Edit subject',[F('name','Subject','text',s.name),F('category','Student category (none = all students)','select',s.category||'',catList(s.category)),
     {...F('topics','Topics and sub-topics','topics',parseTopics(s.topics)),btn:'+ Add topic'},{...F('cats','Assignment submit categories','list',[...(s.cats||[]),'']),ph:'Category name',btn:'+ Add category'}],o=>{
     if(!o.cats.length)throw new Error('Add at least one assignment category.');return fs.doc('subjects/'+s.id).update({name:o.name,category:o.category,topics:o.topics,cats:o.cats,updatedAt:TS()})})},
-  delSubj(b){const id=b.dataset.id,ps=S.projects.filter(p=>p.subjectId===id),subs=S.subs.filter(x=>x.subjectId===id);if(confirm('Delete this subject, its '+ps.length+' assignment(s) and '+subs.length+' student submission(s) (including PDFs in Drive)?'))run(()=>wipe([fs.doc('subjects/'+id),...ps.map(p=>fs.doc('projects/'+p.id)),...subs.map(x=>fs.doc('submissions/'+x.id))],subs))},
+  delSubj(b){const id=b.dataset.id,ps=S.projects.filter(p=>p.subjectId===id),subs=S.subs.filter(x=>x.subjectId===id);if(confirm('Delete this subject, its '+ps.length+' assignment(s) and '+subs.length+' student submission(s) (including PDFs in Drive)?'))run(()=>wipe([fs.doc('subjects/'+id),...ps.map(p=>fs.doc('projects/'+p.id)),...subs.map(x=>fs.doc('submissions/'+x.id)),...S.prog.filter(x=>ps.some(p=>p.id===x.projectId)).map(x=>fs.doc('entryProg/'+x.id))],subs))},
   addProj(){const cats=id=>(byId('subjects',id)||{}).cats||[];
     dlg('Add assignment',[F('subjectId','Subject','select',S.subjects[0].id,S.subjects.map(s=>[s.id,s.name])),
       {...F('topic','Topic / sub-topic (from the subject syllabus)','select','',topicOpts),dep:'subjectId'},
       F('title','Assignment title'),F('link','Assignment question PDF — Google Drive link (Anyone with the link → Viewer)'),
-      {...F('answers','Answer PDFs — choose the submit category, paste its Drive link, and use + to add more','pairs',[],cats),dep:'subjectId'}],async o=>{
+      {...F('answers','Answer PDFs — choose the submit category, paste its Drive link, and use + to add more','pairs',[],cats),dep:'subjectId'},
+      {...F('entries','Day-by-day entries — shown one by one to the student in the live entry guide (optional)','entries',[]),btn:'+ Add entry'}],async o=>{
       const url=dview(o.link);if(!o.answers.length)throw new Error('Add at least one answer PDF.');if(o.answers.some(a=>!a.cat))throw new Error('This subject has no submit categories. Add them in Subjects first.');
       o.answers.forEach(a=>a.url=dview(a.url));
-      await fs.collection('projects').add({subjectId:o.subjectId,topic:o.topic,title:o.title,pdfUrl:url,answers:o.answers,order:projs(o.subjectId).length+1,createdAt:TS(),updatedAt:TS()})})},
+      await fs.collection('projects').add({subjectId:o.subjectId,topic:o.topic,title:o.title,pdfUrl:url,answers:o.answers,entries:o.entries,order:projs(o.subjectId).length+1,createdAt:TS(),updatedAt:TS()})})},
   editProj(b){const p=byId('projects',b.dataset.id),sj=byId('subjects',p.subjectId)||{},cats=()=>[...new Set([...(sj.cats||[]),...(p.answers||[]).map(a=>a.cat)])];
     dlg('Edit assignment',[{...F('topic','Topic / sub-topic','select',p.topic||'',()=>topicOpts(p.subjectId)),dep:'_'},F('title','Title','text',p.title),F('order','Order (1 = first, unlocks in this order)','number',p.order),F('link','New question PDF link (blank = keep current)'),
-      {...F('answers','Answer PDFs by submit category (use + to add more)','pairs',p.answers||[],cats),dep:'_'}],async o=>{
+      {...F('answers','Answer PDFs by submit category (use + to add more)','pairs',p.answers||[],cats),dep:'_'},
+      {...F('entries','Day-by-day entries (one by one in the live entry guide)','entries',p.entries||[]),btn:'+ Add entry'}],async o=>{
       if(!o.answers.length)throw new Error('Add at least one answer PDF.');o.answers.forEach(a=>a.url=dview(a.url));
-      const d={topic:o.topic,title:o.title,order:+o.order||p.order,answers:o.answers,updatedAt:TS()};if(o.link)d.pdfUrl=dview(o.link);await fs.doc('projects/'+p.id).update(d)})},
-  delProj(b){const id=b.dataset.id,subs=S.subs.filter(x=>x.projectId===id);if(confirm('Delete this assignment and its '+subs.length+' student submission(s) (including PDFs in Drive)?'))run(()=>wipe([fs.doc('projects/'+id),...subs.map(x=>fs.doc('submissions/'+x.id))],subs))},
+      const d={topic:o.topic,title:o.title,order:+o.order||p.order,answers:o.answers,entries:o.entries,updatedAt:TS()};if(o.link)d.pdfUrl=dview(o.link);await fs.doc('projects/'+p.id).update(d)})},
+  delProj(b){const id=b.dataset.id,subs=S.subs.filter(x=>x.projectId===id);if(confirm('Delete this assignment and its '+subs.length+' student submission(s) (including PDFs in Drive)?'))run(()=>wipe([fs.doc('projects/'+id),...subs.map(x=>fs.doc('submissions/'+x.id)),...S.prog.filter(x=>x.projectId===id).map(x=>fs.doc('entryProg/'+x.id))],subs))},
   delSubm(b){const x=byId('subs',b.dataset.id);if(confirm('Delete this submission and its PDF in Drive? The student can then upload again.'))run(()=>wipe([fs.doc('submissions/'+x.id)],[x]))},
   editSubm(b){const x=byId('subs',b.dataset.id);dlg('Edit submission — '+x.studentName+' · '+x.cat,[F('res','Result','select',x.passed?'ok':'err',[['ok','Correct (mark as passed)'],['err','Errors (student must resubmit)']]),F('note','Note (optional)','text',x.note||'')],o=>{
     const ok=o.res==='ok';return fs.doc('submissions/'+x.id).update({passed:ok,note:o.note,edited:true,editedAt:TS(),mism:ok?[]:((x.mism||[]).length?x.mism:[{name:'Marked incorrect by admin'+(o.note?': '+o.note:''),expected:[],found:null,note:true}])})})},
   submitCat(b){run(async()=>{const p=byId('projects',b.dataset.id),ci=+b.dataset.ci,c=reqCats(p)[ci],sst=$('#sst'+ci),f=document.querySelector('.rep[data-ci="'+ci+'"]').files[0];
     if(!unlocked(me.id,p.subjectId,projs(p.subjectId).indexOf(p)))throw new Error('This assignment is locked. Complete the previous assignment first.');
+    if((p.entries||[]).length&&eDone(me.id,p)<p.entries.length)throw new Error('Finish all the day-by-day entries in the live entry guide first.');
     if(!f)return sst.textContent='Choose your PDF file first.';
     if(!/\.pdf$/i.test(f.name)&&f.type!=='application/pdf')return sst.textContent='Only PDF files are allowed.';
     if(f.size>20*1024*1024)return sst.textContent='File is too large (max 20 MB).';
