@@ -92,10 +92,10 @@ async function pdfLines(url){
   const r=await fetch('https://www.googleapis.com/drive/v3/files/'+gid(url)+'?alt=media&key='+DRIVE_API_KEY);
   if(!r.ok)throw new Error('Cannot read a Google Drive file (error '+r.status+'). It must be a PDF shared as "Anyone with the link → Viewer".');
   return pdfFromBuf(await r.arrayBuffer())}
-async function pdfFromBuf(buf){await loadPdf();const pdf=await pdfjsLib.getDocument({data:buf}).promise,out=[];
+async function pdfFromBuf(buf){await loadPdf();const pdf=await pdfjsLib.getDocument({data:buf}).promise,out=[];out.meta=[];
   for(let n=1;n<=pdf.numPages;n++){const tc=await(await pdf.getPage(n)).getTextContent(),
-    it=tc.items.filter(i=>i.str.trim()).map(i=>({s:i.str,x:i.transform[4],y:i.transform[5]})).sort((a,b)=>b.y-a.y||a.x-b.x);
-    let cur=[],cy=null;const flush=()=>{if(cur.length)out.push(cur.sort((a,b)=>a.x-b.x).map(i=>i.s).join(' '))};
+    it=tc.items.filter(i=>i.str.trim()).map(i=>({s:i.str,x:i.transform[4],y:i.transform[5],w:i.width||0,h:i.height||Math.abs(i.transform[3])||10,page:n})).sort((a,b)=>b.y-a.y||a.x-b.x);
+    let cur=[],cy=null;const flush=()=>{if(cur.length){cur.sort((a,b)=>a.x-b.x);out.push(cur.map(i=>i.s).join(' '));out.meta.push(cur)}};
     for(const i of it){if(cy!==null&&Math.abs(i.y-cy)>3){flush();cur=[];cy=null}cur.push(i);if(cy===null)cy=i.y}flush()}
   return out}
 async function toDrive(file,name,batch,student){
@@ -109,18 +109,50 @@ const fmt=n=>Number(n).toLocaleString('en-IN');
 const DATE=/\b\d{1,2}[-\/.](?:\d{1,2}|[A-Za-z]{3})[-\/.]\d{2,4}\b/g,AMT=/\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+\.\d+|\d{2,}/g;
 function parseLine(t){const c=t.replace(DATE,' '),amts=(c.match(AMT)||[]).map(x=>parseFloat(x.replace(/,/g,''))).filter(x=>!isNaN(x)),
   name=c.replace(AMT,' ').replace(/\b(Dr|Cr)\b/gi,'').replace(/\s+/g,' ').trim();return{name,label:name.toLowerCase().replace(/[^a-z]/g,''),amts}}
+const I=n=>fmt(Math.round(n));
+function why(e,f,all){
+  if(f===undefined)return 'A value is missing on this line — check that the entry was posted.';
+  const ad=Math.abs(f-e),re=Math.round(e),rf=Math.round(f),sd=n=>String(n).split('').sort().join('');
+  if(re!==rf&&String(re).length===String(rf).length&&sd(re)===sd(rf))return 'The digits look swapped or mistyped — re-check the amount you entered.';
+  if(e&&f&&[10,100].some(k=>Math.abs(f/e-k)<1e-9||Math.abs(e/f-k)<1e-9))return 'The value is '+(f>e?'10× or 100× too high':'10× or 100× too low')+' — check decimal places and extra zeros.';
+  if(all.some(x=>Math.abs(x-e)<=1))return 'The correct amount appears elsewhere in your report — it may be posted to the wrong ledger or the wrong side (Dr/Cr).';
+  if(ad<=Math.max(10,Math.abs(e)*0.005))return 'Small difference of ₹'+I(ad)+' — check rounding or a small keying error.';
+  return f<e?`Your value is ₹${I(ad)} less than expected — an entry may be missing or entered with too small an amount.`:`Your value is ₹${I(ad)} more than expected — look for a duplicate entry or an amount entered too high.`}
+const rd=v=>Math.round(v*10)/10,bx=i=>({page:i.page,x:rd(i.x),y:rd(i.y),w:rd(i.w),h:rd(i.h)});
+const lineBox=its=>{const x=Math.min(...its.map(i=>i.x)),x2=Math.max(...its.map(i=>i.x+i.w));return{page:its[0].page,x:rd(x),y:rd(Math.min(...its.map(i=>i.y))),w:rd(x2-x),h:rd(Math.max(...its.map(i=>i.h)))}};
 function compare(ans,stu){
   const sl=stu.map(parseLine),al=ans.map(parseLine).filter(x=>x.amts.length);
   if(!al.length)throw new Error('The answer key PDF has no readable amounts. Ask your teacher to check it.');
   if(!sl.some(x=>x.amts.length))throw new Error('No readable text found in your PDF. Export the report from Tally as PDF (not a photo or scan).');
-  const by=new Map();sl.forEach(x=>{if(x.label){if(!by.has(x.label))by.set(x.label,[]);by.get(x.label).push(x.amts)}});
+  const by=new Map();sl.forEach((x,i)=>{if(x.label){if(!by.has(x.label))by.set(x.label,[]);by.get(x.label).push({amts:x.amts,idx:i})}});
   const all=sl.flatMap(x=>x.amts),has=(pool,v)=>{const i=pool.findIndex(y=>Math.abs(y-v)<=1);if(i<0)return false;pool.splice(i,1);return true},
-    contains=(pool,need)=>{const p=[...pool];return need.every(v=>has(p,v))};
+    contains=(pool,need)=>{const p=[...pool];return need.every(v=>has(p,v))},
+    score=(pool,need)=>{const p=[...pool];return need.filter(v=>has(p,v)).length},
+    split=(pool,need)=>{const p=[...pool],miss=[];need.forEach(v=>{if(!has(p,v))miss.push(v)});return{miss,extra:p}};
   let ok=0;const mism=[];
-  for(const a of al){let good,found=null;
-    if(a.label){const c=by.get(a.label);if(c){good=c.some(x=>contains(x,a.amts));found=c[0]}else good=false}else good=contains(all,a.amts);
-    if(good)ok++;else mism.push({name:a.name||'Amount line',expected:a.amts,found})}
+  for(const a of al){let good=false,found=null,hint='',boxes=[];
+    if(a.label){const c=by.get(a.label);
+      if(c){good=c.some(x=>contains(x.amts,a.amts));
+        if(!good){const best=c.reduce((m,x)=>score(x.amts,a.amts)>score(m.amts,a.amts)?x:m,c[0]);found=best.amts;const{miss,extra}=split(best.amts,a.amts);
+          hint=[...new Set(miss.map((e,k)=>why(e,extra[k],all)))].join(' ');
+          const its=(stu.meta&&stu.meta[best.idx])||[];
+          extra.forEach(v=>its.filter(it=>parseLine(it.s).amts.some(y=>Math.abs(y-v)<=1)).forEach(it=>boxes.push(bx(it))));
+          if(!boxes.length&&its.length)boxes.push(lineBox(its))}}
+      else hint=a.amts.every(v=>all.some(y=>Math.abs(y-v)<=1))?'These amounts exist in your report but under a different name — check the ledger/account name.':`“${a.name}” was not found in your report. Check the ledger/account name and that all entries were posted.`}
+    else{good=contains(all,a.amts);if(!good)hint='This amount ('+a.amts.map(I).join(', ')+') is not found anywhere in your report — check the totals.'}
+    if(good)ok++;else mism.push({name:a.name||'Amount line',expected:a.amts,found,hint,boxes:boxes.slice(0,6)})}
   return{total:al.length,correct:ok,mism:mism.slice(0,40)}}
+let plReady;const markedPdf={};
+function loadPdfLib(){return plReady||(plReady=new Promise((ok,no)=>{const e=document.createElement('script');e.src='https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';e.onload=ok;e.onerror=()=>no(new Error('Could not load the PDF marker.'));document.head.appendChild(e)}))}
+async function markPdf(buf,mism){await loadPdfLib();const{PDFDocument,rgb,StandardFonts}=PDFLib,doc=await PDFDocument.load(buf,{ignoreEncryption:true}),pages=doc.getPages(),font=await doc.embedFont(StandardFonts.HelveticaBold),reg=await doc.embedFont(StandardFonts.Helvetica),red=rgb(.85,.1,.1),
+    clean=t=>String(t).replace(/₹/g,'Rs. ').replace(/[“”]/g,'"').replace(/[×]/g,'x').replace(/[—–]/g,'-').replace(/[^\x20-\x7E]/g,'');
+  mism.forEach((m,i)=>(m.boxes||[]).forEach(b=>{const pg=pages[b.page-1];if(!pg)return;
+    pg.drawRectangle({x:b.x-2,y:b.y-3,width:b.w+4,height:b.h+5,color:red,opacity:.18,borderColor:red,borderWidth:1.2});pg.drawText(String(i+1),{x:Math.max(2,b.x-13),y:b.y,size:9,font,color:red})}));
+  let pg=doc.addPage([595,842]),y=800;const line=(t,f,sz,col)=>{if(y<50){pg=doc.addPage([595,842]);y=800}pg.drawText(t,{x:40,y,size:sz,font:f,color:col});y-=sz+5};
+  line('Errors found in this report',font,16,red);y-=8;
+  mism.forEach((m,i)=>{const words=clean((i+1)+'. '+m.name+(m.hint?' - '+m.hint:'')).split(' ');let cur='';
+    words.forEach(w=>{const t=cur?cur+' '+w:w;if(reg.widthOfTextAtSize(t,10)>510){line(cur,reg,10,rgb(.1,.1,.1));cur=w}else cur=t});if(cur)line(cur,reg,10,rgb(.1,.1,.1));y-=4});
+  return doc.save()}
 function openErrors(){const m=new Map();for(const x of S.subs){const k=x.userId+'|'+x.projectId+'|'+x.cat,g=m.get(k)||{subs:[],ok:false};g.subs.push(x);if(x.passed)g.ok=true;m.set(k,g)}
   return[...m.values()].filter(g=>!g.ok).map(g=>g.subs.sort(srt)[0])}
 const dlinks=t=>t.split(/[\s,]+/).filter(Boolean).map(dview);
@@ -203,9 +235,9 @@ function tSubjects(){return `<div class="card row"><h2>Subjects &amp; syllabus</
 function tProjects(){return `<div class="card row"><h2>Projects</h2><button class="p" data-a="addProj" ${S.subjects.length?'':'disabled'}>+ Add assignment</button></div>`+
   S.subjects.map(s=>{const l=projs(s.id);return l.length?`<div class="card"><h2>${esc(s.name)}</h2>`+l.map(p=>`<div class="pr"><div><b>${p.order}. ${esc(p.title)}</b><div class="mu">${esc((p.topic||'General').replace(/^-\s*/,''))} · ${esc(reqCats(p).join(', '))} · <a href="${esc(p.pdfUrl)}" target="_blank" rel="noopener">PDF</a> · updated ${dt(p.updatedAt)}</div></div><div>${btn('editProj',p.id,'Edit')} ${isAdmin()?btn('delProj',p.id,'Delete','d'):''}</div></div>`).join('')+'</div>':''}).join('')}
 function tSubs(){let l=S.subs.filter(s=>!fb||s.batchId===fb);if(fe==='err')l=l.filter(s=>!s.passed);
-  const lk=s=>(s.files||[]).map((f,i)=>`<a href="${esc(f)}" target="_blank" rel="noopener">PDF ${i+1}</a>`).join(' ');
+  const lk=s=>(s.files||[]).map((f,i)=>`<a href="${esc(f)}" target="_blank" rel="noopener">${i?'Marked PDF':'PDF'}</a>`).join(' ');
   return `<div class="card row"><h2>Student submissions (${l.length})</h2><div class="row"><select id="fb" style="width:auto"><option value="">All batches</option>${S.batches.map(b=>`<option value="${b.id}" ${fb===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select><select id="fe" style="width:auto"><option value="">All results</option><option value="err" ${fe==='err'?'selected':''}>Errors only</option></select></div></div><div class="card">`+
-  tbl(['Date &amp; time','Reg. no','Student','Batch','Subject','Assignment','Category','Result','Mismatches','Reports',...(isAdmin()?['']:[])],l.map(s=>`<tr><td>${dt(s.at)}</td><td>${esc(s.regno)}</td><td>${esc(s.studentName)}</td><td>${esc(bname(s.batchId))}</td><td>${esc(s.subjectName)}</td><td>${esc(s.projectTitle)}</td><td>${esc(s.cat)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Passed':'Errors'} (${s.correct}/${s.total})</td><td>${(s.mism||[]).length?`<details><summary>${s.mism.length} mismatch(es)</summary><div style="white-space:normal;min-width:280px">${s.mism.map(m=>m.note?esc(m.name):esc(m.name)+': expected '+m.expected.map(fmt).join(', ')+(m.found?', student has <span class="hl">'+m.found.map(fmt).join(', ')+'</span>':', <span class="hl">not found in student PDF</span>')).join('<br>')}</div></details>`:''}</td><td>${lk(s)}</td>${isAdmin()?`<td>${btn('editSubm',s.id,'Edit')} ${btn('delSubm',s.id,'Delete','d')}</td>`:''}</tr>`))+'</div>'}
+  tbl(['Date &amp; time','Reg. no','Student','Batch','Subject','Assignment','Category','Result','Mismatches','Reports',...(isAdmin()?['']:[])],l.map(s=>`<tr><td>${dt(s.at)}</td><td>${esc(s.regno)}</td><td>${esc(s.studentName)}</td><td>${esc(bname(s.batchId))}</td><td>${esc(s.subjectName)}</td><td>${esc(s.projectTitle)}</td><td>${esc(s.cat)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Passed':'Errors'} (${s.correct}/${s.total})</td><td>${(s.mism||[]).length?`<details><summary>${s.mism.length} mismatch(es)</summary><div style="white-space:normal;min-width:280px">${s.mism.map((m,i)=>(i+1)+'. '+(m.note?esc(m.name):esc(m.name)+': expected '+m.expected.map(fmt).join(', ')+(m.found?', student has <span class="hl">'+m.found.map(fmt).join(', ')+'</span>':', <span class="hl">not found in student PDF</span>'))+(m.hint?'<br><span class="mu">💡 '+esc(m.hint)+'</span>':'')).join('<br>')}</div></details>`:''}</td><td>${lk(s)}</td>${isAdmin()?`<td>${btn('editSubm',s.id,'Edit')} ${btn('delSubm',s.id,'Delete','d')}</td>`:''}</tr>`))+'</div>'}
 function tProgress(){const st=S.users.filter(u=>u.role==='student');
   return `<div class="card">`+tbl(['Reg. no','Name','Batch',...S.subjects.map(s=>esc(s.name)),'Last submission'],st.map(u=>{
     const last=S.subs.find(s=>s.userId===u.id);
@@ -248,10 +280,10 @@ function projectView(){const p=byId('projects',view.p),sj=byId('subjects',p.subj
   <h2>Submit your reports</h2>${op?'<p class="mu">Export each report from Tally as a PDF and upload it under its category. Errors are shown in red and your teacher is notified. You can resubmit as many times as needed. The next assignment unlocks when every category is correct.</p>':'<p class="bad">This assignment is inactive. Complete the previous assignment first.</p>'}`+
   cats.map((c,i)=>{const ok=catPassed(me.id,p.id,c),l=latest(me.id,p.id,c);
     if(ok)return `<div class="card"><b>${esc(c)}</b> <span class="ok">✓ Correct</span></div>`;
-    return `<div class="card ${l?'err':''}"><b>${esc(c)}</b>${l?` <span class="bad">⚠ ${l.mism.length} error(s) found on ${dt(l.at)}. Correct them and upload again.</span><ul class="bad">${l.mism.map(m=>`<li>${esc(m.name)}${m.note?'':' — '+(m.found?'your value <span class="hl">'+m.found.map(fmt).join(', ')+'</span> is wrong':'<span class="hl">not found in your report</span>')}</li>`).join('')}</ul>`:''}
+    return `<div class="card ${l?'err':''}"><b>${esc(c)}</b>${l?` <span class="bad">⚠ ${l.mism.length} error(s) found on ${dt(l.at)}. Correct them and upload again.</span><ol class="bad">${l.mism.map(m=>`<li>${esc(m.name)}${m.note?'':' — '+(m.found?'your value <span class="hl">'+m.found.map(fmt).join(', ')+'</span> is wrong':'<span class="hl">not found in your report</span>')}${m.hint?'<div class="mu">💡 '+esc(m.hint)+'</div>':''}</li>`).join('')}</ol>${markedPdf[p.id+'|'+c]?`<details open><summary><b>Your report with the errors marked in red</b></summary><iframe src="${markedPdf[p.id+'|'+c]}" title="Marked report"></iframe><p><a href="${markedPdf[p.id+'|'+c]}" download="marked-${esc(c)}.pdf">Download marked PDF</a></p></details>`:''}`:''}
     ${op?`<label>Upload your ${esc(c)} PDF</label><input type="file" accept="application/pdf" class="rep" data-ci="${i}">
     <p><button class="p" data-a="submitCat" data-id="${p.id}" data-ci="${i}">${l?'Resubmit':'Upload'} &amp; check</button> <span id="sst${i}" class="mu"></span></p>`:''}</div>`}).join('')+
-  `<div class="card"><h2>My submissions</h2>${mine.length?tbl(['Date &amp; time','Category','Result','File'],mine.map(s=>`<tr><td>${dt(s.at)}</td><td>${esc(s.cat)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Correct':'Errors ('+s.mism.length+')'}</td><td>${(s.files||[]).map(f=>`<a href="${esc(f)}" target="_blank" rel="noopener">PDF</a>`).join(' ')||'—'}</td></tr>`)):'<p class="mu">None yet.</p>'}</div>`}
+  `<div class="card"><h2>My submissions</h2>${mine.length?tbl(['Date &amp; time','Category','Result','File'],mine.map(s=>`<tr><td>${dt(s.at)}</td><td>${esc(s.cat)}</td><td class="${s.passed?'ok':'bad'}">${s.passed?'Correct':'Errors ('+s.mism.length+')'}</td><td>${(s.files||[]).length?'Saved ✓':'—'}</td></tr>`)):'<p class="mu">None yet.</p>'}</div>`}
 /* ---------- actions ---------- */
 const catOpts=()=>[['','—']].concat([...new Set(S.batches.map(b=>b.category).filter(Boolean))].map(c=>[c,c]));
 const batchOpts=()=>[['','— none —']].concat(S.batches.map(b=>[b.id,b.name]));
@@ -311,11 +343,13 @@ const ACT={
     if(!f)return sst.textContent='Choose your PDF file first.';
     if(!/\.pdf$/i.test(f.name)&&f.type!=='application/pdf')return sst.textContent='Only PDF files are allowed.';
     if(f.size>20*1024*1024)return sst.textContent='File is too large (max 20 MB).';
-    b.disabled=true;sst.textContent='Reading your report…';const stu=await pdfFromBuf(await f.arrayBuffer());
+    b.disabled=true;sst.textContent='Reading your report…';const buf=await f.arrayBuffer(),stu=await pdfFromBuf(buf.slice(0));
     sst.textContent='Comparing with the answer key…';let ans=[];for(const a of p.answers.filter(a=>a.cat===c))ans=ans.concat(await pdfLines(a.url));
-    const r=compare(ans,stu),sj=byId('subjects',p.subjectId);let files=[];
+    const r=compare(ans,stu),sj=byId('subjects',p.subjectId);let files=[],marked=null;
+    if(r.mism.length){try{sst.textContent='Marking the errors in red…';marked=new File([await markPdf(buf.slice(0),r.mism)],'marked.pdf',{type:'application/pdf'})}catch(x){console.warn('mark failed',x)}}
+    const mk=p.id+'|'+c;if(markedPdf[mk])URL.revokeObjectURL(markedPdf[mk]);if(marked)markedPdf[mk]=URL.createObjectURL(marked);else delete markedPdf[mk];
     if(UPLOAD_URL.startsWith('http')){sst.textContent='Saving to Google Drive…';const stamp=new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
-      files=[await toDrive(f,[sj.name,p.title,c,stamp].join('_').replace(/[^\w.-]+/g,'_')+'.pdf',bname(me.batchId),(me.regno+' - '+me.name))]}
+      const base=[sj.name,p.title,c,stamp].join('_').replace(/[^\w.-]+/g,'_'),who=me.regno+' - '+me.name;files=[await toDrive(f,base+'.pdf',bname(me.batchId),who)];if(marked)files.push(await toDrive(marked,base+'_MARKED.pdf',bname(me.batchId),who))}
     await fs.collection('submissions').add({userId:me.id,studentName:me.name,regno:me.regno,batchId:me.batchId||'',subjectId:p.subjectId,subjectName:sj.name,projectId:p.id,projectTitle:p.title,cat:c,
       files,correct:r.correct,total:r.total,mism:r.mism,passed:r.mism.length===0,at:TS()})})}
 };
